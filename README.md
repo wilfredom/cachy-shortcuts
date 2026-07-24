@@ -33,6 +33,15 @@ none of them work across all three compositors. This does both:
   which is arguably the better signal: a binding you keep searching for is
   one you haven't internalized yet.
 
+**[Interactive design preview](docs/overlay-preview.html)** — the overlay
+can't be screenshotted or run in the environment that built it (no Wayland
+session, no GTK4), so this reproduces its exact palette and interaction logic
+in a self-contained HTML file. Open it in a browser, or download it and open
+it locally: search filtering, arrow-key navigation, and the whole edit flow
+(`Enter` to rebind, `Ctrl+Enter` to edit the command, `n`/`d` to add/delete,
+live conflict feedback) all work for real. See the file itself for exactly
+what's real versus simulated.
+
 ## Install
 
 ### Arch / CachyOS (recommended)
