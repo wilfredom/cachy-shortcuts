@@ -1,0 +1,22 @@
+name: Firefox
+match:
+  - firefox
+shortcuts:
+  - chord: "Ctrl+T"
+    description: "New tab"
+  - chord: "Ctrl+W"
+    description: "Close tab"
+  - chord: "Ctrl+Shift+T"
+    description: "Reopen closed tab"
+  - chord: "Ctrl+L"
+    description: "Focus address bar"
+  - chord: "Ctrl+F"
+    description: "Find in page"
+  - chord: "Ctrl+Tab"
+    description: "Next tab"
+  - chord: "Ctrl+Shift+Tab"
+    description: "Previous tab"
+  - chord: "Ctrl+Shift+P"
+    description: "Private window"
+  - chord: "Ctrl+Shift+R"
+    description: "Reload, bypassing cache"

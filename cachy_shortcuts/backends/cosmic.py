@@ -163,7 +163,7 @@ class CosmicBackend(Backend):
         value = action.strip()
         # A bare command means "run this"; wrap it in the Spawn action.
         if not re.match(r"^[A-Z][A-Za-z]*(\(|$)", value):
-            value = f'Spawn("{value}")'
+            value = f'Spawn("{_escape(value)}")'
         return f'(modifiers: [{mods}], key: "{key}"): {value},'
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:
@@ -180,6 +180,10 @@ class CosmicBackend(Backend):
     def reload(self) -> None:
         # cosmic-settings-daemon watches the config; nothing to trigger.
         return None
+
+
+def _escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _match(text: str, sc: Scanner, i: int, open_ch: str, close_ch: str) -> int:

@@ -235,3 +235,21 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
 def undo_last() -> list[Path]:
     """Roll back the most recent write."""
     return backup.restore_latest()
+
+
+def wrap_command_as_action(backend: Backend, command: str) -> str:
+    """Wrap a bare shell command in the backend's spawn syntax.
+
+    Centralised so the escaping rule is applied exactly once: niri's
+    spawn-sh takes the whole command as a single double-quoted string, so an
+    embedded quote must be escaped or the emitted KDL is invalid. COSMIC's
+    own quote-escaping lives in its `render()`, since a bare command there is
+    wrapped by the backend itself rather than by the caller.
+    """
+    command = command.strip()
+    if backend.name == "niri":
+        escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+        return f'spawn-sh "{escaped}"'
+    if backend.name == "mango":
+        return f"spawn {command}"
+    return command

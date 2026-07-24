@@ -1,0 +1,20 @@
+name: Files
+match:
+  - nautilus
+  - org.gnome.nautilus
+  - org.gnome.files
+shortcuts:
+  - chord: "Ctrl+L"
+    description: "Type a path"
+  - chord: "Ctrl+H"
+    description: "Show hidden files"
+  - chord: "F2"
+    description: "Rename"
+  - chord: "Ctrl+Shift+N"
+    description: "New folder"
+  - chord: "Delete"
+    description: "Move to trash"
+  - chord: "Ctrl+1"
+    description: "Icon view"
+  - chord: "Ctrl+2"
+    description: "List view"

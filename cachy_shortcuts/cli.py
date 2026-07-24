@@ -10,9 +10,8 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
 
-from . import __version__, appscan, backup, conflicts, detect, editor, usage
+from . import __version__, appscan, backup, cheatsheets, conflicts, detect, editor, usage
 from .backends.base import Backend
 from .model import Category, Chord, Shortcut
 
@@ -212,7 +211,7 @@ def cmd_add(args) -> int:
     if not command:
         _die("provide a command, or --app NAME")
 
-    action = _as_action(backend, command)
+    action = editor.wrap_command_as_action(backend, command)
     try:
         result = editor.add(backend, chord, action, args.description or "")
     except editor.EditError as exc:
@@ -221,15 +220,6 @@ def cmd_add(args) -> int:
     print(_c(f"  {result.path}", DIM))
     print(_c("  undo with: cachy-shortcuts undo", DIM))
     return 0
-
-
-def _as_action(backend: Backend, command: str) -> str:
-    """Wrap a bare command in the backend's spawn syntax."""
-    if backend.name == "niri":
-        return f'spawn-sh "{command}"'
-    if backend.name == "mango":
-        return f"spawn {command}"
-    return command  # cosmic's render() wraps it in Spawn(...)
 
 
 def cmd_rm(args) -> int:
@@ -302,6 +292,29 @@ def cmd_forget(args) -> int:
     if not args.all:
         _die("pass --all to erase all lookup history, or give a chord")
     print("Erased lookup history." if usage.forget_all() else "No history to erase.")
+    return 0
+
+
+def cmd_cheatsheet(args) -> int:
+    if args.list:
+        packs = cheatsheets.available_packs()
+        if not packs:
+            print("No cheat sheet packs found.")
+            return 1
+        for pack in packs:
+            aliases = ", ".join(pack.match)
+            print(f"  {_c(pack.name, ACCENT)}  {_c(f'({aliases})', DIM)}")
+        return 0
+
+    if not args.app:
+        _die("give an app id (e.g. firefox), or pass --list")
+    entries = cheatsheets.load_for(args.app)
+    if not entries:
+        print(f"No cheat sheet matches {args.app!r}.")
+        return 1
+    width = max(len(s.chord.display()) for s in entries)
+    for s in sorted(entries, key=lambda s: s.chord.display()):
+        print(f"  {_c(s.chord.display().ljust(width), ACCENT)}  {_c('→', DIM)} {s.label}")
     return 0
 
 
@@ -384,6 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_forget.add_argument("chord", nargs="?")
     p_forget.add_argument("--all", action="store_true")
     p_forget.set_defaults(func=cmd_forget)
+
+    p_cheat = sub.add_parser("cheatsheet", help="preview an app's bundled cheat sheet")
+    p_cheat.add_argument("app", nargs="?", help="app id or name, e.g. firefox")
+    p_cheat.add_argument("--list", action="store_true", help="list available packs")
+    p_cheat.set_defaults(func=cmd_cheatsheet)
 
     p_overlay = sub.add_parser("overlay", help="open the overlay (default action)")
     p_overlay.add_argument("--toggle", action="store_true",

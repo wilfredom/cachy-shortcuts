@@ -107,6 +107,28 @@ class TestMutatingCommands:
         assert "add" in capsys.readouterr().out
 
 
+class TestCheatsheetCommand:
+    def test_list_shows_bundled_packs(self, env, capsys):
+        assert cli.main(["cheatsheet", "--list"]) == 0
+        out = capsys.readouterr().out
+        assert "Firefox" in out
+        assert "VS Code" in out
+
+    def test_preview_a_known_app(self, env, capsys):
+        assert cli.main(["cheatsheet", "firefox"]) == 0
+        out = capsys.readouterr().out
+        assert "New tab" in out
+
+    def test_unknown_app_fails_cleanly(self, env, capsys):
+        assert cli.main(["cheatsheet", "no-such-app"]) == 1
+        assert "No cheat sheet matches" in capsys.readouterr().out
+
+    def test_no_args_requires_list_or_app(self, env, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["cheatsheet"])
+        assert "--list" in capsys.readouterr().err
+
+
 class TestDoctor:
     def test_reports_every_backend(self, env, capsys):
         cli.main(["doctor"])

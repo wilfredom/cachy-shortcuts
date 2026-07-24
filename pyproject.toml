@@ -18,6 +18,10 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# Real PyYAML gives cheat-sheet packs and hand-edited user overrides more
+# forgiving parsing; a small dependency-free fallback covers the packs'
+# actual schema when it's absent, so this stays optional.
+yaml = ["pyyaml"]
 
 [project.scripts]
 cachy-shortcuts = "cachy_shortcuts.cli:main"
@@ -26,7 +30,7 @@ cachy-shortcuts = "cachy_shortcuts.cli:main"
 include = ["cachy_shortcuts*"]
 
 [tool.setuptools.package-data]
-cachy_shortcuts = ["cheatsheets/*.yaml", "ui/*.css"]
+cachy_shortcuts = ["cheatsheets/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

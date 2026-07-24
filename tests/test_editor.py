@@ -251,3 +251,31 @@ class TestSafety:
             backup.create([niri_rw.config_paths()[0]], reason="test")
         assert backup.prune(keep=2) == 3
         assert len(backup.list_snapshots()) == 2
+
+
+class TestCommandWrapping:
+    """wrap_command_as_action is the single place commands get escaped before
+    being embedded in a backend's own quoting syntax."""
+
+    def test_niri_wraps_in_spawn_sh(self, niri_rw):
+        assert editor.wrap_command_as_action(niri_rw, "firefox") == 'spawn-sh "firefox"'
+
+    def test_niri_escapes_embedded_quotes(self, niri_rw):
+        action = editor.wrap_command_as_action(niri_rw, 'echo "hi"')
+        assert action == 'spawn-sh "echo \\"hi\\""'
+        # Adding it must produce valid KDL: re-parsing recovers the exact
+        # same bind rather than truncating at the embedded quote.
+        result = editor.add(niri_rw, Chord.parse("Super+Z"), action)
+        reparsed = niri_rw.parse(result.path.read_text(), result.path)
+        target = next(s for s in reparsed if s.chord == Chord.parse("Super+Z"))
+        assert target.action == action
+
+    def test_mango_wraps_in_spawn(self, mango_rw):
+        assert editor.wrap_command_as_action(mango_rw, "firefox") == "spawn firefox"
+
+    def test_cosmic_leaves_bare_commands_for_render_to_wrap(self, cosmic_rw):
+        assert editor.wrap_command_as_action(cosmic_rw, "firefox") == "firefox"
+
+    def test_cosmic_render_escapes_embedded_quotes(self, cosmic_rw):
+        rendered = cosmic_rw.render(Chord.parse("Super+Z"), 'echo "hi"')
+        assert rendered == '(modifiers: [Super], key: "z"): Spawn("echo \\"hi\\""),'
