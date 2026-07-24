@@ -1,0 +1,24 @@
+name: VS Code
+match:
+  - code-oss
+  - code-insiders
+  - vscodium
+  - vscode
+  - code
+shortcuts:
+  - chord: "Ctrl+P"
+    description: "Quick open file"
+  - chord: "Ctrl+Shift+P"
+    description: "Command palette"
+  - chord: "Ctrl+Grave"
+    description: "Toggle terminal"
+  - chord: "Ctrl+B"
+    description: "Toggle sidebar"
+  - chord: "Ctrl+Slash"
+    description: "Toggle line comment"
+  - chord: "Ctrl+D"
+    description: "Select next occurrence"
+  - chord: "F12"
+    description: "Go to definition"
+  - chord: "Ctrl+Shift+F"
+    description: "Search across files"

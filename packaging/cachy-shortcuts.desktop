@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Keybinding Atlas
+GenericName=Keyboard Shortcuts
+Comment=Browse and edit your keyboard shortcuts
+Exec=cachy-shortcuts overlay
+Icon=input-keyboard-symbolic
+Terminal=false
+Categories=Settings;Utility;
+Keywords=keybinding;shortcut;hotkey;niri;cosmic;mango;
+NoDisplay=false

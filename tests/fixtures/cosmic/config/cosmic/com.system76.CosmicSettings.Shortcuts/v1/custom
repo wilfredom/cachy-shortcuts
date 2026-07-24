@@ -1,0 +1,9 @@
+// User overrides
+{
+    (modifiers: [Super], key: "b"): Spawn("firefox"),
+    (modifiers: [Super], key: "e"): Spawn("nautilus"),
+    // Override a default: Super+t launches a terminal instead of tiling
+    (modifiers: [Super], key: "t"): Spawn("alacritty"),
+    // Remove a default entirely
+    (modifiers: [Super], key: "w"): Disable,
+}

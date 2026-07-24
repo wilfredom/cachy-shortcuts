@@ -1,0 +1,18 @@
+name: Alacritty
+match:
+  - alacritty
+shortcuts:
+  - chord: "Ctrl+Shift+C"
+    description: "Copy"
+  - chord: "Ctrl+Shift+V"
+    description: "Paste"
+  - chord: "Ctrl+Shift+N"
+    description: "New window"
+  - chord: "Ctrl+Shift+Equal"
+    description: "Increase font size"
+  - chord: "Ctrl+Shift+Minus"
+    description: "Decrease font size"
+  - chord: "Ctrl+Shift+F"
+    description: "Search scrollback"
+  - chord: "Ctrl+Shift+Period"
+    description: "Next search match"
