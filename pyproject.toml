@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cachy-shortcuts"
+version = "0.1.0"
+description = "An editable, searchable keybinding atlas for COSMIC, Niri and MangoWM"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# No runtime dependencies for the core/CLI on purpose: the parsers are
+# hand-rolled so `cachy-shortcuts list|doctor` works on a bare Python.
+# The overlay additionally needs PyGObject + gtk4-layer-shell, which are
+# system packages rather than wheels (see PKGBUILD).
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+cachy-shortcuts = "cachy_shortcuts.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cachy_shortcuts*"]
+
+[tool.setuptools.package-data]
+cachy_shortcuts = ["cheatsheets/*.yaml", "ui/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

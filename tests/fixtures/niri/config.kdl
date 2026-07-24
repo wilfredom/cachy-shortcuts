@@ -1,0 +1,15 @@
+// Main niri config, CachyOS niri-noctalia layout.
+input {
+    keyboard {
+        xkb {
+            layout "us"
+        }
+    }
+}
+
+include "cfg/keybinds.kdl"
+include optional=true "cfg/missing.kdl"
+
+layout {
+    gaps 8
+}

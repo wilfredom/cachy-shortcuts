@@ -1,0 +1,14 @@
+// COSMIC system defaults
+{
+    (modifiers: [Super], key: "q"): Close,
+    (modifiers: [Super], key: "Return"): System(Terminal),
+    (modifiers: [Super], key: "Escape"): System(LockScreen),
+    (modifiers: [Super, Shift], key: "Left"): Move(Left),
+    (modifiers: [Super, Shift], key: "Right"): Move(Right),
+    (modifiers: [Super], key: "1"): Workspace(1),
+    (modifiers: [Super], key: "2"): Workspace(2),
+    (modifiers: [], key: "Print"): System(Screenshot),
+    (modifiers: [Super], key: "f"): Maximize,
+    (modifiers: [Super], key: "t"): ToggleTiling,
+    (modifiers: [Super], key: "w"): System(WorkspaceOverview),
+}
