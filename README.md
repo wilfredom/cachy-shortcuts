@@ -1,20 +1,20 @@
 # cachy-shortcuts
 
 An editable, searchable keybinding atlas for CachyOS — one overlay, one
-hotkey, across COSMIC, Niri, and MangoWM.
+hotkey, across COSMIC, Niri, Hyprland, and MangoWM.
 
 <img width="995" height="868" alt="cachy-shortcuts" src="https://github.com/user-attachments/assets/dd047562-2226-4f28-b6a5-bb65b534acd8" />
 
 Read-only cheat sheets already exist for this (Omarchy's keybindings overlay,
 Niri's built-in `show-hotkey-overlay`, Noctalia's `keybind-cheatsheet`). What
 none of them do is let you *change* a binding from inside the overlay, and
-none of them work across all three compositors. This does both:
+none of them work across every compositor. This does both:
 
-- **One tool, three compositors.** COSMIC, Niri, and MangoWM each store
-  keybindings in a different format, in a different place, with different
-  key-naming conventions. `cachy-shortcuts` reads and writes all three
-  through the same interface, so the same chord (say, `Super+Return` for a
-  terminal) is one comparable identity no matter which session you're in.
+- **One tool, four compositors.** COSMIC, Niri, Hyprland, and MangoWM each
+  store keybindings in a different format, in a different place, with
+  different key-naming conventions. `cachy-shortcuts` reads and writes all of
+  them through the same interface, so the same chord (say, `Super+Return` for
+  a terminal) is one comparable identity no matter which session you're in.
 - **Edit in place, safely.** Every write is preceded by a snapshot, written
   atomically, and re-parsed to confirm it took effect — a failure at any step
   rolls the file back automatically. Edits are surgical: only the bytes a
@@ -95,12 +95,19 @@ writes a float rule per compositor, matched on the overlay's app id
 | Compositor | Rule |
 |---|---|
 | Niri | a `window-rule` with `open-floating true` in `config.kdl` |
+| Hyprland | `windowrule = float on, match:class ^(...)$` in `hyprland.conf` |
 | MangoWM | `windowrule=isfloating:1,...` in `config.conf` |
 | COSMIC | a tiling exception in `com.system76.CosmicSettings.WindowRules/v1/tiling_exception_custom` |
 
 Each is written through the same snapshot → atomic write → validate → rollback
 path as every other edit, carries a `cachy-shortcuts` marker comment so
 re-running is a no-op, and is undoable with `cachy-shortcuts undo`.
+
+Hyprland's window-rule grammar changed twice and neither change was backwards
+compatible, so the version is read (`hyprctl version`, falling back to
+`Hyprland --version` when no session is running) and the matching form is
+written: the `match:class` grammar on 0.53+, `windowrule = float, class:…` on
+0.45–0.52, and `windowrulev2` below that.
 
 ## Usage
 
@@ -166,7 +173,7 @@ cachy-shortcuts forget --all            # erase lookup history
 cachy-shortcuts install-rules           # add the tiling exception (--dry-run to preview)
 ```
 
-Add `--backend {niri,cosmic,mango}` to target a specific compositor, or
+Add `--backend {niri,hyprland,cosmic,mango}` to target a specific compositor, or
 `--all` to see every one with a config on disk regardless of which is
 currently running.
 
@@ -200,9 +207,17 @@ cheat sheet to match.
   (`~/.local/share/cachy-shortcuts/backups/`), the write is atomic, and the
   result is re-parsed to confirm the edit actually took — any failure rolls
   the snapshot back automatically.
-- **Niri live-reloads**, so an edit there applies with no extra step. Mango
-  reloads via `mmsg -d reload_config`. COSMIC's settings daemon watches its
-  own config file.
+- **Niri live-reloads**, so an edit there applies with no extra step. Hyprland
+  reloads via `hyprctl reload`, Mango via `mmsg -d reload_config`. COSMIC's
+  settings daemon watches its own config file.
+- **Hyprland's `$variables` survive an edit.** `$mainMod` and friends are
+  expanded for display and comparison but written back unexpanded, and a bind
+  with a description stays a `bindd`. Binds inside a `submap` are shown and
+  tagged, and their chords are compared only against that submap — a resize
+  mode reusing `Super+H` is not a conflict.
+- **Your shell is detected, not assumed.** Hyprland is run bare as often as
+  it's run under Noctalia, so `install-hotkey` and `doctor` report which shell
+  (if any) they found, and the overlay takes its colours from that one.
 
 Each backend's module docstring in `cachy_shortcuts/backends/` documents the
 exact grammar it parses, if you're curious or debugging a parse.

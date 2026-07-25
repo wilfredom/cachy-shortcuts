@@ -14,10 +14,11 @@ from .conftest import FIXTURES, by_chord
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A throwaway XDG environment seeded with all three fixture configs."""
+    """A throwaway XDG environment seeded with every fixture config."""
     config = tmp_path / "config"
     config.mkdir()
     shutil.copytree(FIXTURES / "niri", config / "niri")
+    shutil.copytree(FIXTURES / "hyprland", config / "hypr")
     shutil.copytree(FIXTURES / "mango", config / "mango")
     shutil.copytree(FIXTURES / "cosmic" / "config" / "cosmic", config / "cosmic")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
@@ -32,7 +33,7 @@ class TestListCommand:
         assert cli.main(["list", "--json", "--all"]) == 0
         payload = json.loads(capsys.readouterr().out)
         names = {entry["backend"] for entry in payload}
-        assert names == {"niri", "cosmic", "mango"}
+        assert names == {"niri", "hyprland", "cosmic", "mango"}
 
     def test_json_entries_carry_the_useful_fields(self, env, capsys):
         cli.main(["list", "--json", "--backend", "niri"])
@@ -133,8 +134,13 @@ class TestDoctor:
     def test_reports_every_backend(self, env, capsys):
         cli.main(["doctor"])
         out = capsys.readouterr().out
-        for name in ("Niri", "COSMIC", "MangoWM"):
+        for name in ("Niri", "Hyprland", "COSMIC", "MangoWM"):
             assert name in out
+
+    def test_reports_the_detected_shell(self, env, capsys):
+        cli.main(["doctor"])
+        # Nothing is installed in the throwaway environment.
+        assert "shell           : none detected" in capsys.readouterr().out
 
     def test_reports_the_active_session(self, env, capsys):
         cli.main(["doctor"])
@@ -186,6 +192,23 @@ class TestConflictDetection:
         )
         assert found == []
 
+    def test_a_submap_chord_does_not_conflict_with_the_global_one(self, env):
+        """Hyprland submaps only bind their chords inside that mode."""
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        backend = HyprlandBackend(config_root=env / "hypr")
+        shortcuts = backend.read()
+        # The fixture binds Super+Q globally *and* inside the resize submap.
+        assert len([s for s in shortcuts if s.chord == Chord.parse("Super+Q")]) == 2
+        assert conflicts.find_conflicts(shortcuts) == []
+
+    def test_a_submap_chord_does_not_claim_a_free_chord(self, env):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        backend = HyprlandBackend(config_root=env / "hypr")
+        # `Escape` is bound only inside the submap, so it is still free.
+        assert conflicts.is_available(Chord.parse("Escape"), backend.read())
+
     def test_claimant_names_the_owning_shell(self, env):
         backend = NiriBackend(config_root=env / "niri")
         message = conflicts.describe_claimant(Chord.parse("Super+S"), backend.read())
@@ -217,7 +240,30 @@ class TestInstallHotkey:
     def test_installs_into_every_detected_compositor(self, env, capsys):
         assert cli.main(["install-hotkey"]) == 0
         out = capsys.readouterr().out
-        assert out.count("bound") >= 3
+        assert out.count("bound") >= 4
+
+    def test_hyprland_gets_an_exec_action(self, env, capsys):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        cli.main(["install-hotkey"])
+        backend = HyprlandBackend(config_root=env / "hypr")
+        mine = next(s for s in backend.read() if s.owner == "cachy-shortcuts")
+        assert mine.action == "exec cachy-shortcuts overlay --toggle"
+        assert mine.extras["submap"] == ""
+
+    def test_does_not_take_a_noctalia_chord(self, env, capsys):
+        """Noctalia's own Hyprland binds are attributed and must be left alone."""
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        cli.main(["install-hotkey"])
+        backend = HyprlandBackend(config_root=env / "hypr")
+        noctalia = {s.chord.canonical for s in backend.read() if s.owner == "Noctalia"}
+        mine = next(s for s in backend.read() if s.owner == "cachy-shortcuts")
+        assert mine.chord.canonical not in noctalia
+
+    def test_reports_the_detected_shell(self, env, capsys):
+        cli.main(["install-hotkey", "--dry-run"])
+        assert "Shell: none detected" in capsys.readouterr().out
 
     def test_avoids_niris_built_in_overlay_chord(self, env, capsys):
         cli.main(["install-hotkey"])

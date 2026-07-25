@@ -188,6 +188,51 @@ class TestDMSPalette:
         assert palette.accent == "#abcdef"
 
 
+class TestShellDetection:
+    """Hyprland runs both bare and under a shell, so which one is present is
+    detected rather than assumed."""
+
+    @pytest.fixture(autouse=True)
+    def no_shell_on_path(self, monkeypatch):
+        """Ignore whatever happens to be installed on the machine running the
+        tests -- these assertions are about the fixture directory."""
+        monkeypatch.setattr(theming.shutil, "which", lambda name: None)
+        monkeypatch.setattr(theming, "_SHELL_PROCESSES", {})
+
+    def test_nothing_installed_detects_nothing(self, config_home):
+        assert theming.detect_shell() is None
+
+    def test_a_noctalia_config_is_detected(self, config_home):
+        (config_home / "noctalia").mkdir()
+        assert theming.detect_shell() == "noctalia"
+
+    def test_a_dms_palette_is_detected(self, config_home):
+        d = config_home / "DankMaterialShell"
+        d.mkdir()
+        (d / "colors.json").write_text(json.dumps({"primary": "#abcdef"}))
+        assert theming.detect_shell() == "dms"
+
+    def test_both_installed_is_not_a_detection(self, config_home):
+        (config_home / "noctalia").mkdir()
+        d = config_home / "DankMaterialShell"
+        d.mkdir()
+        (d / "colors.json").write_text(json.dumps({"primary": "#abcdef"}))
+        assert theming.detect_shell() is None
+
+    def test_a_running_shell_wins_over_what_is_on_disk(self, config_home, monkeypatch):
+        from cachy_shortcuts import detect
+
+        (config_home / "noctalia").mkdir()
+        monkeypatch.setattr(theming, "_SHELL_PROCESSES", {"dms": ("dms",)})
+        monkeypatch.setattr(detect, "running_processes", lambda: {"dms", "Hyprland"})
+        assert theming.detect_shell() == "dms"
+
+    def test_display_names(self):
+        assert theming.shell_display_name("noctalia") == "Noctalia"
+        assert theming.shell_display_name("dms") == "DankMaterialShell"
+        assert theming.shell_display_name(None) == "none"
+
+
 class TestCurrentPalette:
     def test_falls_back_to_reference_with_nothing_on_disk(self, config_home):
         assert theming.current_palette("niri") == theming.REFERENCE
@@ -225,6 +270,37 @@ class TestCurrentPalette:
         palette = theming.current_palette("mango")
         assert palette.accent == "#55ff55"
         assert palette.source == "dms"
+
+    def test_hyprland_with_noctalia_follows_noctalia(self, config_home):
+        scheme_dir = config_home / "noctalia" / "colorschemes" / "X"
+        scheme_dir.mkdir(parents=True)
+        (scheme_dir / "X.json").write_text(json.dumps({"primary": "#ff5555"}))
+        palette = theming.current_palette("hyprland")
+        assert palette.accent == "#ff5555"
+        assert palette.source.startswith("noctalia")
+
+    def test_hyprland_without_noctalia_falls_back_to_the_reference(self, config_home):
+        assert theming.current_palette("hyprland") == theming.REFERENCE
+
+    def test_hyprland_with_only_dms_follows_dms(self, config_home):
+        dms_dir = config_home / "DankMaterialShell"
+        dms_dir.mkdir()
+        (dms_dir / "colors.json").write_text(json.dumps({"primary": "#55ff55"}))
+        palette = theming.current_palette("hyprland")
+        assert palette.accent == "#55ff55"
+        assert palette.source == "dms"
+
+    def test_the_detected_shell_outranks_the_compositor_preference(
+        self, config_home, monkeypatch
+    ):
+        """A Mango box that only has Noctalia should still use Noctalia."""
+        # Ignore anything installed on the machine running the tests.
+        monkeypatch.setattr(theming.shutil, "which", lambda name: None)
+        scheme_dir = config_home / "noctalia" / "colorschemes" / "X"
+        scheme_dir.mkdir(parents=True)
+        (scheme_dir / "X.json").write_text(json.dumps({"primary": "#ff5555"}))
+        assert theming.detect_shell() == "noctalia"
+        assert theming.current_palette("mango").source.startswith("noctalia")
 
     def test_a_shell_palette_is_raised_to_the_contrast_floor(self, config_home):
         """A theme too dark to read must come back readable, not verbatim."""

@@ -59,6 +59,16 @@ class TestModifiers:
     def test_mango_raw_keycode_modifier_is_preserved(self):
         assert normalize_mod("code:64") == "code:64"
 
+    @pytest.mark.parametrize("raw", ["CAPS", "MOD2", "MOD3", "MOD5"])
+    def test_hyprland_x11_modifier_slots_are_kept(self, raw):
+        """Hyprland binds may name these directly; dropping one would make two
+        different chords compare equal."""
+        assert normalize_mod(raw) == raw.lower()
+
+    def test_x11_slots_sort_after_the_shared_modifiers(self):
+        chord = Chord.from_parts(["MOD5", "SHIFT", "SUPER"], "b")
+        assert chord.canonical == "super+shift+mod5+b"
+
 
 class TestKeys:
     def test_mango_raw_keycode_stays_opaque(self):

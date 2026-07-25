@@ -6,7 +6,7 @@ can't silently steal a binding the user (or Noctalia/DMS) already relies on.
 
 from __future__ import annotations
 
-from . import conflicts, detect, editor, floatrule
+from . import conflicts, detect, editor, floatrule, theming
 from .backends.base import Backend
 from .model import Chord
 
@@ -28,7 +28,21 @@ def _action_for(backend: Backend) -> str:
         return 'spawn-sh "cachy-shortcuts overlay --toggle"'
     if backend.name == "mango":
         return "spawn cachy-shortcuts overlay --toggle"
+    if backend.name == "hyprland":
+        return "exec cachy-shortcuts overlay --toggle"
     return "cachy-shortcuts overlay --toggle"
+
+
+def describe_shell() -> str:
+    """One line about which shell the overlay will take its colours from.
+
+    Hyprland in particular is run both bare and under Noctalia, so this is
+    detected at install time rather than assumed from the compositor.
+    """
+    shell = theming.detect_shell()
+    if shell is None:
+        return "none detected - overlay uses its built-in theme"
+    return f"{theming.shell_display_name(shell)} - overlay follows its colours"
 
 
 def install_hotkey(chord_text: str | None = None, dry_run: bool = False) -> int:
@@ -77,6 +91,7 @@ def install_hotkey(chord_text: str | None = None, dry_run: bool = False) -> int:
         print(f"{backend.display_name}: bound {chord.display()}  ({result.path})")
 
     failures += install_rules(dry_run=dry_run)
+    print(f"\nShell: {describe_shell()}")
 
     if not dry_run and failures == 0:
         print("\nPress your new hotkey to open the overlay.")

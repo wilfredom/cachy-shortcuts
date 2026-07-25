@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from cachy_shortcuts.backends import CosmicBackend, MangoBackend, NiriBackend
+from cachy_shortcuts.backends import (
+    CosmicBackend,
+    HyprlandBackend,
+    MangoBackend,
+    NiriBackend,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -10,6 +15,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture
 def niri():
     return NiriBackend(config_root=FIXTURES / "niri")
+
+
+@pytest.fixture
+def hyprland():
+    """A Hyprland config as it looks under the Noctalia shell."""
+    return HyprlandBackend(config_root=FIXTURES / "hyprland")
+
+
+@pytest.fixture
+def hyprland_vanilla():
+    """The same compositor with no shell: no variables, no Noctalia binds."""
+    return HyprlandBackend(config_root=FIXTURES / "hyprland-vanilla")
 
 
 @pytest.fixture
@@ -26,8 +43,8 @@ def cosmic():
 
 
 @pytest.fixture
-def all_backends(niri, mango, cosmic):
-    return [niri, mango, cosmic]
+def all_backends(niri, hyprland, mango, cosmic):
+    return [niri, hyprland, mango, cosmic]
 
 
 def by_chord(shortcuts):

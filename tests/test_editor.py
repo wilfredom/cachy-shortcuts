@@ -9,7 +9,12 @@ import shutil
 import pytest
 
 from cachy_shortcuts import backup, editor
-from cachy_shortcuts.backends import CosmicBackend, MangoBackend, NiriBackend
+from cachy_shortcuts.backends import (
+    CosmicBackend,
+    HyprlandBackend,
+    MangoBackend,
+    NiriBackend,
+)
 from cachy_shortcuts.model import Chord
 
 from .conftest import FIXTURES, by_chord
@@ -33,6 +38,13 @@ def mango_rw(tmp_path):
     root = tmp_path / "mango"
     shutil.copytree(FIXTURES / "mango", root)
     return MangoBackend(config_root=root)
+
+
+@pytest.fixture
+def hypr_rw(tmp_path):
+    root = tmp_path / "hypr"
+    shutil.copytree(FIXTURES / "hyprland", root)
+    return HyprlandBackend(config_root=root)
 
 
 @pytest.fixture
@@ -87,6 +99,62 @@ class TestRoundTripFidelity:
         assert rendered.startswith("bindl=")
 
 
+    def test_hyprland_binds_are_byte_identical(self, hypr_rw):
+        for shortcut in hypr_rw.read():
+            rendered = hypr_rw.render(
+                shortcut.chord,
+                shortcut.action,
+                shortcut.description,
+                shortcut.extras,
+            )
+            assert rendered == shortcut.raw
+
+    def test_hyprland_keeps_the_config_variable(self, hypr_rw):
+        """An edit must not bake `$mainMod` down to the SUPER it expands to."""
+        found = by_chord(hypr_rw.read())
+        target = found["super+return"]
+        rendered = hypr_rw.render(target.chord, "exec kitty", extras=target.extras)
+        assert rendered == "bind = $mainMod, Return, exec, kitty"
+
+    def test_hyprland_preserves_bind_flags(self, hypr_rw):
+        found = by_chord(hypr_rw.read())
+        target = found["super+l"]
+        rendered = hypr_rw.render(target.chord, target.action, extras=target.extras)
+        assert rendered.startswith("bindl = ")
+
+    def test_hyprland_description_round_trips_as_bindd(self, hypr_rw):
+        found = by_chord(hypr_rw.read())
+        target = found["super+b"]
+        rendered = hypr_rw.render(target.chord, target.action, "Web browser", target.extras)
+        assert rendered == "bindd = $mainMod, B, Web browser, exec, $browser"
+
+    def test_hyprland_description_cannot_smuggle_in_a_field_separator(self, hypr_rw):
+        """A comma is this grammar's separator, so one in a description would
+        turn the rest of it into a dispatcher."""
+        result = editor.add(
+            hypr_rw, Chord.parse("Super+Z"), "exec obsidian", "Notes, and more"
+        )
+        reparsed = hypr_rw.parse(result.path.read_text(), result.path)
+        target = next(s for s in reparsed if s.chord == Chord.parse("Super+Z"))
+        assert target.action == "exec obsidian"
+        assert target.description == "Notes; and more"
+
+    def test_hyprland_dropping_a_description_drops_the_d_flag(self, hypr_rw):
+        found = by_chord(hypr_rw.read())
+        target = found["super+b"]
+        rendered = hypr_rw.render(target.chord, target.action, "", target.extras)
+        assert rendered.startswith("bind = ")
+        assert "Web browser" not in rendered
+
+    def test_hyprland_adding_params_to_a_bare_dispatcher_spaces_the_comma(self, hypr_rw):
+        """`killactive,` re-rendered with a command must not read `exec,firefox`."""
+        target = next(
+            s for s in hypr_rw.read() if s.chord.canonical == "super+q" and not s.extras["submap"]
+        )
+        rendered = hypr_rw.render(target.chord, "exec firefox", extras=target.extras)
+        assert rendered == "bind = $mainMod, Q, exec, firefox"
+
+
 class TestSurgicalWrites:
     def test_rebind_leaves_comments_intact(self, niri_rw):
         path = niri_rw.config_paths()[0]
@@ -125,6 +193,51 @@ class TestSurgicalWrites:
         assert "bind=SUPER,n,spawn,obsidian" in text
         # The trailing comment block must not have been displaced.
         assert text.count("# System") == 1
+
+    def test_add_to_hyprland_stays_out_of_the_submap(self, hypr_rw):
+        """A new global bind appended inside a submap would only fire in it."""
+        editor.add(hypr_rw, Chord.parse("Super+N"), "exec obsidian", "Notes")
+        text = hypr_rw.config_paths()[0].read_text()
+        added = text.index("bindd = $mainMod, N, Notes, exec, obsidian")
+        assert added < text.index("submap = resize")
+        assert by_chord(hypr_rw.read())["super+n"].extras["submap"] == ""
+
+    def test_add_to_a_submap_only_hyprland_config_stays_global(self, hypr_rw, tmp_path):
+        """With no global bind to sit beside, the new one goes above the submap."""
+        path = hypr_rw.config_paths()[0]
+        path.write_text(
+            "submap = resize\nbind = , right, resizeactive, 10 0\nsubmap = reset\n"
+        )
+        editor.add(hypr_rw, Chord.parse("Super+N"), "exec obsidian")
+        found = by_chord(hypr_rw.read())
+        assert found["super+n"].extras["submap"] == ""
+        assert found["right"].extras["submap"] == "resize"
+
+    def test_add_to_hyprland_reuses_the_config_variable(self, hypr_rw):
+        editor.add(hypr_rw, Chord.parse("Super+Shift+N"), "exec obsidian")
+        text = hypr_rw.config_paths()[0].read_text()
+        assert "bind = $mainMod SHIFT, N, exec, obsidian" in text
+
+    def test_hyprland_delete_removes_the_whole_line(self, hypr_rw):
+        target = by_chord(hypr_rw.read())["super+d"]
+        path = target.source.path
+        editor.delete(hypr_rw, target)
+        text = path.read_text()
+        assert "dash toggle" not in text
+        assert "\n\n\n" not in text
+        assert "super+d" not in by_chord(hypr_rw.read())
+
+    def test_hyprland_retarget_changes_only_the_command(self, hypr_rw):
+        path = hypr_rw.config_paths()[0]
+        before = path.read_text()
+        target = by_chord(hypr_rw.read())["super+h"]
+        editor.retarget(hypr_rw, target, "movefocus r")
+        after = path.read_text()
+        changed = [
+            (a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b
+        ]
+        assert len(changed) == 1
+        assert changed[0][1] == "bind = $mainMod, H, movefocus, r"
 
     def test_delete_removes_the_whole_line(self, mango_rw):
         target = by_chord(mango_rw.read())["super+g"]
@@ -273,6 +386,9 @@ class TestCommandWrapping:
     def test_mango_wraps_in_spawn(self, mango_rw):
         assert editor.wrap_command_as_action(mango_rw, "firefox") == "spawn firefox"
 
+    def test_hyprland_wraps_in_exec(self, hypr_rw):
+        assert editor.wrap_command_as_action(hypr_rw, "firefox") == "exec firefox"
+
     def test_cosmic_leaves_bare_commands_for_render_to_wrap(self, cosmic_rw):
         assert editor.wrap_command_as_action(cosmic_rw, "firefox") == "firefox"
 
@@ -304,6 +420,11 @@ class TestUnwrapAction:
         action = editor.wrap_command_as_action(mango_rw, "firefox")
         assert editor.unwrap_action(mango_rw, action) == "firefox"
         assert editor.unwrap_action(mango_rw, "quit") is None
+
+    def test_hyprland_round_trips(self, hypr_rw):
+        action = editor.wrap_command_as_action(hypr_rw, "firefox")
+        assert editor.unwrap_action(hypr_rw, action) == "firefox"
+        assert editor.unwrap_action(hypr_rw, "killactive") is None
 
     def test_cosmic_unwraps_its_spawn_form(self, cosmic_rw):
         assert editor.unwrap_action(cosmic_rw, 'Spawn("firefox")') == "firefox"

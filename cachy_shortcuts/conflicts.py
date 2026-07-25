@@ -36,21 +36,33 @@ class Conflict:
         return f"{self.chord.display()} claimed {len(self.shortcuts)}x: {where}"
 
 
+def _scope(shortcut: Shortcut) -> tuple[str, str, str]:
+    """What has to match before two bindings are competing for the same chord.
+
+    Beyond the backend, a mode scope: Hyprland's submaps only bind a chord
+    while that mode is active, so a submap's Super+H and the global one never
+    fire at the same time and are not in conflict.
+    """
+    return (
+        shortcut.source.backend if shortcut.source else "",
+        shortcut.extras.get("submap") or "",
+        shortcut.chord.canonical,
+    )
+
+
 def find_conflicts(shortcuts: list[Shortcut]) -> list[Conflict]:
-    """Chords bound more than once *within the same backend*.
+    """Chords bound more than once *within the same backend and mode*.
 
     Cross-backend duplicates are not conflicts: the user only ever runs one
-    compositor at a time, and Super+Return meaning "terminal" in all three is
+    compositor at a time, and Super+Return meaning "terminal" in all of them is
     the desired outcome, not a problem.
     """
     keyed = sorted(
         (s for s in shortcuts if not s.extras.get("disabled")),
-        key=lambda s: (s.source.backend if s.source else "", s.chord.canonical),
+        key=_scope,
     )
     out: list[Conflict] = []
-    for (_, _), group in groupby(
-        keyed, key=lambda s: (s.source.backend if s.source else "", s.chord.canonical)
-    ):
+    for _, group in groupby(keyed, key=_scope):
         items = list(group)
         if len(items) > 1:
             out.append(Conflict(chord=items[0].chord, shortcuts=items))
@@ -58,9 +70,14 @@ def find_conflicts(shortcuts: list[Shortcut]) -> list[Conflict]:
 
 
 def claimant(chord: Chord, shortcuts: list[Shortcut]) -> Shortcut | None:
-    """The existing binding that already owns ``chord``, if any."""
+    """The existing *global* binding that already owns ``chord``, if any.
+
+    Mode-scoped bindings (Hyprland submaps) are skipped: they don't stop a
+    chord from working outside their mode, so treating one as a claim would
+    refuse a perfectly free chord.
+    """
     for s in shortcuts:
-        if s.extras.get("disabled"):
+        if s.extras.get("disabled") or s.extras.get("submap"):
             continue
         if s.chord == chord:
             return s

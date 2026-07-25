@@ -1,4 +1,4 @@
-"""cachy-shortcuts: an editable keybinding atlas for COSMIC, Niri and MangoWM."""
+"""cachy-shortcuts: an editable keybinding atlas for COSMIC, Niri, Hyprland and MangoWM."""
 
 __version__ = "0.1.0"
 
