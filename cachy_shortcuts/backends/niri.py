@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
 from .. import APP_IDS, RULE_MARKER
 from ..model import Category, Chord, Shortcut, SourceRef, infer_category
 from ._kdl import Scanner, find_block
-from .base import Backend, FloatRule
+from .base import Backend, FloatRule, escape_regex
 
 # Canonical key -> the spelling niri uses. Only needed when *emitting* a new
 # bind; parsed binds keep their original spelling in extras so a round-trip is
@@ -317,7 +316,7 @@ class NiriBackend(Backend):
         overlay whether GTK reports its application id or the binary name.
         """
         matches = "\n".join(
-            f"    match app-id={_kdl_regex(f'^{_escape_regex(app_id)}$')}"
+            f"    match app-id={_kdl_regex(f'^{escape_regex(app_id)}$')}"
             for app_id in APP_IDS
         )
         body = (
@@ -380,18 +379,6 @@ def _unquote(literal: str) -> str:
 
 def _escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
-
-
-_REGEX_META = re.compile(r"([.^$*+?()\[\]{}|\\])")
-
-
-def _escape_regex(s: str) -> str:
-    """Escape regex metacharacters for niri's Rust-regex matchers.
-
-    Narrower than ``re.escape``, which also escapes ``-`` and whitespace --
-    legal in Rust's regex crate but noise in a config file a human reads.
-    """
-    return _REGEX_META.sub(r"\\\1", s)
 
 
 def _kdl_regex(pattern: str) -> str:

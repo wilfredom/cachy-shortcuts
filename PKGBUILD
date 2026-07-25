@@ -8,7 +8,7 @@
 pkgname=cachy-shortcuts
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="An editable, searchable keybinding atlas for COSMIC, Niri and MangoWM"
+pkgdesc="An editable, searchable keybinding atlas for COSMIC, Niri, Hyprland and MangoWM"
 arch=('any')
 url="https://github.com/wilfredom/cachy-shortcuts"
 license=('MIT')
@@ -21,6 +21,7 @@ depends=(
 optdepends=(
   'python-yaml: more forgiving parsing of cheat-sheet packs'
   'niri: keybinding backend'
+  'hyprland: keybinding backend'
   'mangowc: keybinding backend'
   'cosmic-session: keybinding backend'
 )

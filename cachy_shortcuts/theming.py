@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -124,6 +125,15 @@ _DMS_CANDIDATES = (
 )
 
 
+def _state_roots() -> list[Path]:
+    """Where DMS might have written its palette: config, then state."""
+    state = os.environ.get("XDG_STATE_HOME")
+    return [
+        _config_home(),
+        Path(state) if state else Path.home() / ".local" / "state",
+    ]
+
+
 def dms_palette() -> Palette | None:
     """Read DankMaterialShell's Material 3 tokens.
 
@@ -131,11 +141,7 @@ def dms_palette() -> Palette | None:
     varies by version, so several known locations are tried; a state directory
     is checked too since generated colours are not strictly configuration.
     """
-    roots = [_config_home()]
-    state = os.environ.get("XDG_STATE_HOME")
-    roots.append(Path(state) if state else Path.home() / ".local" / "state")
-
-    for root in roots:
+    for root in _state_roots():
         for relative in _DMS_CANDIDATES:
             path = root / relative
             if not path.is_file():
@@ -285,22 +291,81 @@ def ensure_contrast(palette: Palette) -> Palette:
     return replace(palette, **fixed)
 
 
+# --- shell detection ------------------------------------------------------
+
+
+# Process name each shell runs under. Best-effort: a shell launched as a
+# Quickshell config (`quickshell -c noctalia-shell`) reports as quickshell, in
+# which case the on-disk check below is what answers.
+_SHELL_PROCESSES = {
+    "noctalia": ("noctalia-shell",),
+    "dms": ("dms", "dankmaterialshell"),
+}
+
+
+def detect_shell() -> str | None:
+    """Which shell this machine runs: ``"noctalia"``, ``"dms"``, or None.
+
+    Hyprland is run both bare and under Noctalia, so which shell to theme
+    against is a question about the machine rather than about the compositor.
+    A running shell is definitive; otherwise an installed one counts, and None
+    means neither is present -- or that both are, which is not a detection but
+    a coin toss, and the caller's own preference should settle it.
+    """
+    from . import detect
+
+    running = detect.running_processes()
+    live = [
+        shell
+        for shell, names in _SHELL_PROCESSES.items()
+        if any(name in running for name in names)
+    ]
+    if len(live) == 1:
+        return live[0]
+
+    noctalia = (_config_home() / "noctalia").is_dir() or bool(
+        shutil.which("noctalia-shell")
+    )
+    dms = bool(shutil.which("dms")) or any(
+        (root / relative).is_file()
+        for root in _state_roots()
+        for relative in _DMS_CANDIDATES
+    )
+    if noctalia == dms:
+        return None
+    return "noctalia" if noctalia else "dms"
+
+
+def shell_display_name(shell: str | None) -> str:
+    return {"noctalia": "Noctalia", "dms": "DankMaterialShell"}.get(shell or "", "none")
+
+
 # --- entry point ----------------------------------------------------------
+
+# Which shell's colours to prefer when detection can't decide, per compositor.
+_SHELL_PREFERENCE = {
+    "niri": ("noctalia", "dms"),
+    "mango": ("dms", "noctalia"),
+    "hyprland": ("noctalia", "dms"),
+}
 
 
 def current_palette(backend_name: str | None = None) -> Palette:
     """Best palette for the active session, falling back to the reference."""
-    if backend_name == "niri":
-        order = (noctalia_palette, dms_palette)
-    elif backend_name == "mango":
-        order = (dms_palette, noctalia_palette)
-    elif backend_name == "cosmic":
+    if backend_name == "cosmic":
         # Neither shell runs on COSMIC; the reference palette is correct there.
         return REFERENCE
-    else:
-        order = (noctalia_palette, dms_palette)
 
-    for reader in order:
+    preference = _SHELL_PREFERENCE.get(backend_name or "", ("noctalia", "dms"))
+    detected = detect_shell()
+    if detected is not None:
+        # One shell is unambiguously the machine's -- read it first, whatever
+        # the compositor would otherwise suggest.
+        preference = (detected, *(s for s in preference if s != detected))
+    # Looked up by name at call time so a monkeypatched reader is honoured.
+    readers = {"noctalia": noctalia_palette, "dms": dms_palette}
+
+    for reader in (readers[shell] for shell in preference):
         try:
             palette = reader()
         except Exception:  # noqa: BLE001 - theming must never break the overlay

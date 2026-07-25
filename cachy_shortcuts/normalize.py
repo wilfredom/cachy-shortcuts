@@ -41,6 +41,16 @@ _MOD_ALIASES: dict[str, str] = {
     "shift": "shift",
     "shift_l": "shift",
     "shift_r": "shift",
+    # X11 modifier slots Hyprland lets a bind name directly. They have no
+    # canonical name of their own, so they stay themselves and sort after the
+    # four every compositor shares. Dropping them instead would be worse than
+    # ugly: two different chords would compare equal.
+    "mod2": "mod2",
+    "mod3": "mod3",
+    "mod5": "mod5",
+    "caps": "caps",
+    "capslock": "caps",
+    "caps_lock": "caps",
 }
 
 # Mango uses NONE as an explicit "no modifiers" marker.

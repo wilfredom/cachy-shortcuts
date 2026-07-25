@@ -143,8 +143,9 @@ _CATEGORY_RULES: tuple[tuple[Category, re.Pattern], ...] = (
     (
         Category.WINDOWS,
         re.compile(
-            r"killclient|closewindow|\bclose\b|fullscreen|maximize|minimize"
-            r"|floating|tiling|togglefloating|focusdir|focuswindow|movewindow"
+            r"killclient|killactive|closewindow|\bclose\b|fullscreen|maximize"
+            r"|minimize|floating|tiling|togglefloating|togglesplit|pseudo"
+            r"|focusdir|focuswindow|movefocus|movewindow|centerwindow|cyclenext"
             r"|resiz|swapwindow|\bfocus\b|\bmove\b|column|consume|expel|stack"
         ),
     ),

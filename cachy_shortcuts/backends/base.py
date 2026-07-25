@@ -13,6 +13,7 @@ any config containing non-ASCII.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -20,6 +21,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..model import Chord, Shortcut
+
+_REGEX_META = re.compile(r"([.^$*+?()\[\]{}|\\])")
+
+
+def escape_regex(s: str) -> str:
+    """Escape regex metacharacters for a compositor's window matchers.
+
+    Narrower than ``re.escape``, which also escapes ``-`` and whitespace --
+    legal in both niri's and Hyprland's regex engines but noise in a config
+    file a human reads.
+    """
+    return _REGEX_META.sub(r"\\\1", s)
 
 
 @dataclass

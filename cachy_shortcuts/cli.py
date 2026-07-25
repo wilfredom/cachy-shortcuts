@@ -181,6 +181,9 @@ def cmd_doctor(args) -> int:
     except Exception as exc:  # noqa: BLE001 - no GTK at all is a normal state here
         print(f"    gtk4-layer-shell: {_c(f'unavailable ({exc})', WARN)}")
     print(f"    overlay app id  : {_c(APP_ID, DIM)}")
+    from .install import describe_shell
+
+    print(f"    shell           : {_c(describe_shell(), DIM)}")
 
     snapshots = backup.list_snapshots()
     print(_c("\n  Backups", BOLD))
@@ -374,13 +377,16 @@ def cmd_install_rules(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cachy-shortcuts",
-        description="An editable, searchable keybinding atlas for COSMIC, Niri and MangoWM.",
+        description=(
+            "An editable, searchable keybinding atlas for "
+            "COSMIC, Niri, Hyprland and MangoWM."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     def add_backend_flags(p):
-        p.add_argument("--backend", choices=["niri", "cosmic", "mango"],
+        p.add_argument("--backend", choices=["niri", "hyprland", "cosmic", "mango"],
                        help="target a specific compositor instead of the active one")
         p.add_argument("--all", action="store_true",
                        help="include every compositor with a config on disk")

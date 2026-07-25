@@ -1,4 +1,4 @@
-"""Parser tests against realistic configs for all three compositors."""
+"""Parser tests against realistic configs for every supported compositor."""
 
 import pytest
 
@@ -123,6 +123,85 @@ class TestMangoReader:
         assert found["super+space"].owner == "DMS"
 
 
+class TestHyprlandReader:
+    def test_follows_source_directive(self, hyprland):
+        assert "binds.conf" in [p.name for p in hyprland.config_paths()]
+
+    def test_variables_expand_in_chords_and_actions(self, hyprland):
+        found = by_chord(hyprland.read())
+        # $mainMod -> SUPER, $terminal -> alacritty
+        assert found["super+return"].action == "exec alacritty"
+
+    def test_variables_reach_sourced_files(self, hyprland):
+        # binds.conf uses $mainMod, which is only defined in hyprland.conf.
+        found = by_chord(hyprland.read())
+        assert found["super+p"].action == "exec hyprshot -m region"
+
+    def test_bindd_description_is_read(self, hyprland):
+        found = by_chord(hyprland.read())
+        assert found["super+b"].description == "Web browser"
+
+    def test_run_together_modifiers_are_split(self, hyprland):
+        # `SUPERSHIFT` is the same chord as `SUPER SHIFT`.
+        found = by_chord(hyprland.read())
+        assert found["super+shift+f"].chord.mods == ("super", "shift")
+
+    def test_empty_modifier_field_yields_bare_chord(self, hyprland):
+        found = by_chord(hyprland.read())
+        assert found["xf86audiomute"].chord.mods == ()
+
+    def test_bind_flags_are_captured(self, hyprland):
+        found = by_chord(hyprland.read())
+        assert found["super+l"].extras["flags"] == "l"
+        assert found["super+mouse:272"].extras["flags"] == "m"
+
+    def test_raw_keycodes_stay_opaque(self, hyprland):
+        found = by_chord(hyprland.read())
+        assert "code:133+code:24" in found
+
+    def test_submap_bindings_are_tagged(self, hyprland):
+        scoped = {s.chord.canonical for s in hyprland.read() if s.extras["submap"]}
+        assert "right" in scoped
+        assert all(s.extras["submap"] == "" for s in hyprland.read() if s.chord.canonical == "super+1")
+
+    def test_submap_reset_ends_the_scope(self, hyprland):
+        # binds.conf is read after the submap block closes.
+        found = by_chord(hyprland.read())
+        assert found["super+p"].extras["submap"] == ""
+
+    def test_comments_are_skipped(self, hyprland):
+        assert all(not s.raw.startswith("#") for s in hyprland.read())
+
+    def test_spans_point_at_the_real_text(self, hyprland):
+        for shortcut in hyprland.read():
+            text = shortcut.source.path.read_text()
+            assert text[shortcut.source.start : shortcut.source.end] == shortcut.raw
+
+    def test_noctalia_binds_are_attributed(self, hyprland):
+        found = by_chord(hyprland.read())
+        assert found["super+space"].owner == "Noctalia"
+
+    def test_a_config_without_a_shell_still_reads(self, hyprland_vanilla):
+        found = by_chord(hyprland_vanilla.read())
+        assert found["super+return"].action == "exec kitty"
+        assert all(s.owner is None for s in hyprland_vanilla.read())
+
+    def test_a_config_without_variables_renders_unchanged(self, hyprland_vanilla):
+        for shortcut in hyprland_vanilla.read():
+            rendered = hyprland_vanilla.render(
+                shortcut.chord, shortcut.action, shortcut.description, shortcut.extras
+            )
+            assert rendered == shortcut.raw
+
+    def test_the_same_chord_is_one_identity_with_or_without_a_shell(
+        self, hyprland, hyprland_vanilla
+    ):
+        shell = by_chord(hyprland.read())
+        bare = by_chord(hyprland_vanilla.read())
+        for canonical in ("super+return", "super+b", "super+1"):
+            assert shell[canonical].chord == bare[canonical].chord
+
+
 class TestCosmicReader:
     def test_reads_defaults(self, cosmic):
         found = by_chord(cosmic.read())
@@ -170,10 +249,10 @@ class TestCategorisation:
             assert Category.LAUNCH in cats, backend.name
             assert Category.WINDOWS in cats, backend.name
 
-    def test_workspace_binds_group_together(self, niri, mango, cosmic):
-        assert by_chord(niri.read())["super+1"].category == Category.WORKSPACES
-        assert by_chord(mango.read())["super+1"].category == Category.WORKSPACES
-        assert by_chord(cosmic.read())["super+1"].category == Category.WORKSPACES
+    def test_workspace_binds_group_together(self, all_backends):
+        for backend in all_backends:
+            found = by_chord(backend.read())
+            assert found["super+1"].category == Category.WORKSPACES, backend.name
 
 
 class TestCrossBackendAgreement:

@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from cachy_shortcuts import APP_ID, APP_IDS, RULE_MARKER, editor, floatrule
-from cachy_shortcuts.backends import CosmicBackend, MangoBackend, NiriBackend
+from cachy_shortcuts.backends import (
+    CosmicBackend,
+    HyprlandBackend,
+    MangoBackend,
+    NiriBackend,
+)
 
 
 @pytest.fixture
@@ -55,6 +60,67 @@ def test_mango_rule_is_one_line_per_app_id(mango):
     ]
     assert len(lines) == len(APP_IDS)
     assert all("isfloating:1" in ln for ln in lines)
+
+
+def test_hyprland_rule_is_one_line_per_property(hyprland):
+    lines = [
+        ln for ln in hyprland.float_rule().body.splitlines() if ln.startswith("windowrule")
+    ]
+    assert len(lines) == 2
+    # Both app ids fit in one matcher because the matcher is a regex; the dots
+    # are metacharacters and must be escaped, the hyphen must not.
+    assert lines[0] == (
+        r"windowrule = float on, match:class ^(dev\.cachyos\.Shortcuts|cachy-shortcuts)$"
+    )
+    assert lines[1].startswith("windowrule = no_blur on,")
+
+
+class TestHyprlandRuleGrammar:
+    """Hyprland's window-rule grammar changed twice, and neither change was
+    backwards compatible, so the rule is written to suit the installed build."""
+
+    def _with_version(self, hyprland, monkeypatch, output):
+        monkeypatch.setattr(hyprland, "_run", lambda *a, **k: output)
+        return hyprland.float_rule().body
+
+    def test_current_hyprland_gets_the_match_grammar(self, hyprland, monkeypatch):
+        body = self._with_version(
+            hyprland, monkeypatch, "Hyprland 0.53.2 built from branch main at commit abc"
+        )
+        assert "windowrule = float on, match:class ^(" in body
+        assert "windowrule = no_blur on, match:class ^(" in body
+
+    def test_pre_regrammar_hyprland_gets_the_class_form(self, hyprland, monkeypatch):
+        body = self._with_version(hyprland, monkeypatch, "Hyprland 0.52.0 built from...")
+        assert "windowrule = float, class:^(" in body
+        assert "windowrule = noblur, class:^(" in body
+        assert "match:" not in body
+
+    def test_pre_rename_hyprland_gets_v2(self, hyprland, monkeypatch):
+        body = self._with_version(hyprland, monkeypatch, "Hyprland 0.44.1 built from...")
+        assert "windowrulev2 = float, class:^(" in body
+
+    def test_the_rename_release_itself_drops_v2(self, hyprland, monkeypatch):
+        body = self._with_version(hyprland, monkeypatch, "Hyprland 0.45.0 built from...")
+        assert "windowrulev2" not in body
+        assert "windowrule = float, class:^(" in body
+
+    def test_the_binarys_own_version_tag_is_understood(self, hyprland, monkeypatch):
+        """`Hyprland --version` answers even with no session running."""
+        body = self._with_version(
+            hyprland,
+            monkeypatch,
+            "Hyprland, built from branch main at commit 1a2b3c4 (fix: thing).\n"
+            "Date: Mon Jan 5 2026\nTag: v0.53.1, commits: 5678\n",
+        )
+        assert "match:class" in body
+
+    def test_an_unreadable_version_falls_back_to_the_current_grammar(
+        self, hyprland, monkeypatch
+    ):
+        for output in (None, "some unrelated output"):
+            body = self._with_version(hyprland, monkeypatch, output)
+            assert "windowrule = float on, match:class ^(" in body
 
 
 def test_cosmic_rule_is_a_ron_list_entry(cosmic):
@@ -189,6 +255,19 @@ def test_a_rejected_write_restores_previous_content(workspace, monkeypatch):
     with pytest.raises(editor.EditError):
         floatrule.install(backend)
     assert path.read_text() == "bind=SUPER,Return,spawn,foot\n"
+
+
+def test_install_into_hyprland_preserves_an_existing_config(workspace):
+    backend = HyprlandBackend()
+    path = backend.float_rule().path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("bind = SUPER, Return, exec, kitty\n")
+    floatrule.install(backend)
+    text = path.read_text()
+    assert "bind = SUPER, Return, exec, kitty" in text
+    assert "windowrule = float on, match:class ^(" in text
+    # ...and the binding is still the only binding.
+    assert len(backend.read()) == 1
 
 
 def test_install_all_collects_failures_without_raising(workspace, monkeypatch):

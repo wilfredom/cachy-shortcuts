@@ -361,11 +361,14 @@ def wrap_command_as_action(backend: Backend, command: str) -> str:
         return f'spawn-sh "{escaped}"'
     if backend.name == "mango":
         return f"spawn {command}"
+    if backend.name == "hyprland":
+        return f"exec {command}"
     return command
 
 
 _NIRI_SPAWN = re.compile(r"^spawn(?:-sh|_shell)?\s+(.*)$", re.DOTALL)
 _MANGO_SPAWN = re.compile(r"^spawn\s+(.*)$", re.DOTALL)
+_HYPR_EXEC = re.compile(r"^exec\s+(.*)$", re.DOTALL)
 _COSMIC_SPAWN = re.compile(r'^Spawn\(\s*"(.*)"\s*\)$', re.DOTALL)
 
 
@@ -393,6 +396,9 @@ def unwrap_action(backend: Backend, action: str) -> str | None:
         return " ".join(parts)
     if backend.name == "mango":
         match = _MANGO_SPAWN.match(text)
+        return match.group(1).strip() if match else None
+    if backend.name == "hyprland":
+        match = _HYPR_EXEC.match(text)
         return match.group(1).strip() if match else None
     match = _COSMIC_SPAWN.match(text)
     if not match:

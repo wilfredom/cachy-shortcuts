@@ -10,5 +10,5 @@ Terminal=false
 # also what the compositor float rules match on.
 StartupWMClass=dev.cachyos.Shortcuts
 Categories=Settings;Utility;
-Keywords=keybinding;shortcut;hotkey;niri;cosmic;mango;
+Keywords=keybinding;shortcut;hotkey;niri;hyprland;cosmic;mango;
 NoDisplay=false
