@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
+from .. import APP_IDS, RULE_MARKER
 from ..model import Category, Chord, Shortcut, SourceRef, infer_category
 from ._kdl import Scanner, find_block
-from .base import Backend
+from .base import Backend, FloatRule
 
 # Canonical key -> the spelling niri uses. Only needed when *emitting* a new
 # bind; parsed binds keep their original spelling in extras so a round-trip is
@@ -305,6 +307,38 @@ class NiriBackend(Backend):
         indent = _detect_indent(text, body_end)
         return (body_end, indent, "\n")
 
+    # --- tiling exception ---------------------------------------------------
+
+    def float_rule(self) -> FloatRule | None:
+        """A ``window-rule`` opening the overlay floating rather than tiled.
+
+        Both app-id spellings are matched: niri takes several ``match`` lines
+        per rule and treats them as alternatives, so one rule covers the
+        overlay whether GTK reports its application id or the binary name.
+        """
+        matches = "\n".join(
+            f"    match app-id={_kdl_regex(f'^{_escape_regex(app_id)}$')}"
+            for app_id in APP_IDS
+        )
+        body = (
+            f"// {RULE_MARKER}: keep the keybinding overlay out of the layout\n"
+            "window-rule {\n"
+            f"{matches}\n"
+            "    open-floating true\n"
+            "    open-focused true\n"
+            "}"
+        )
+        # The main config, not config_paths()[0]: that one is ordered so new
+        # *bindings* land beside existing ones, which for an include-heavy
+        # setup is some keybinds-only file. A window rule belongs in the config
+        # proper.
+        main = self._root / "config.kdl"
+        paths = self.config_paths()
+        target = main if main.exists() or not paths else paths[0]
+        return FloatRule(
+            backend=self.name, path=target, body=body, marker=f"// {RULE_MARKER}:"
+        )
+
     # --- runtime -----------------------------------------------------------
 
     def reload(self) -> None:
@@ -346,6 +380,28 @@ def _unquote(literal: str) -> str:
 
 def _escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+_REGEX_META = re.compile(r"([.^$*+?()\[\]{}|\\])")
+
+
+def _escape_regex(s: str) -> str:
+    """Escape regex metacharacters for niri's Rust-regex matchers.
+
+    Narrower than ``re.escape``, which also escapes ``-`` and whitespace --
+    legal in Rust's regex crate but noise in a config file a human reads.
+    """
+    return _REGEX_META.sub(r"\\\1", s)
+
+
+def _kdl_regex(pattern: str) -> str:
+    """Wrap a regex in KDL's raw-string form, as niri's own config does.
+
+    Raw strings are what keep backslashes in ``dev\\.cachyos\\.Shortcuts``
+    from being eaten by KDL's own escape processing before the regex ever
+    sees them.
+    """
+    return f'r#"{pattern}"#'
 
 
 def _preferred_spelling(chord: Chord, original: str | None) -> str:

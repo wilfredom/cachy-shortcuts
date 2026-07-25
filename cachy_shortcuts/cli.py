@@ -11,7 +11,18 @@ import json
 import os
 import sys
 
-from . import __version__, appscan, backup, cheatsheets, conflicts, detect, editor, usage
+from . import (
+    APP_ID,
+    __version__,
+    appscan,
+    backup,
+    cheatsheets,
+    conflicts,
+    detect,
+    editor,
+    floatrule,
+    usage,
+)
 from .backends.base import Backend
 from .model import Category, Chord, Shortcut
 
@@ -140,6 +151,17 @@ def cmd_doctor(args) -> int:
         else:
             print(f"    conflicts: {_c('none', ACCENT)}")
 
+        state = floatrule.status_for(backend)
+        if state.rule is None:
+            print(f"    tiling   : {_c(state.note, DIM)}")
+        elif state.installed:
+            print(f"    tiling   : {_c('exempt', ACCENT)} ({state.rule.path})")
+        else:
+            print(
+                f"    tiling   : {_c('would be tiled', WARN)}"
+                " (fix with: cachy-shortcuts install-rules)"
+            )
+
     print(_c("\n  Overlay dependencies", BOLD))
     for label, module in (("PyGObject", "gi"), ("PyYAML (optional)", "yaml")):
         try:
@@ -148,13 +170,17 @@ def cmd_doctor(args) -> int:
         except ImportError:
             note = "required for the overlay" if module == "gi" else "bundled fallback in use"
             print(f"    {label}: {_c('missing', WARN)} ({note})")
+    # Import the overlay's own loader rather than probing the typelib directly:
+    # loading order is the thing that actually decides whether layer-shell
+    # works, and only that module gets it right.
     try:
-        import gi  # noqa: F401
+        from .ui import _layershell
 
-        gi.require_version("Gtk4LayerShell", "1.0")
-        print(f"    gtk4-layer-shell: {_c('ok', ACCENT)}")
-    except Exception:  # noqa: BLE001 - any failure means unavailable
-        print(f"    gtk4-layer-shell: {_c('missing', WARN)} (install gtk4-layer-shell)")
+        text = _layershell.status()
+        print(f"    gtk4-layer-shell: {_c(text, ACCENT if _layershell.available() else WARN)}")
+    except Exception as exc:  # noqa: BLE001 - no GTK at all is a normal state here
+        print(f"    gtk4-layer-shell: {_c(f'unavailable ({exc})', WARN)}")
+    print(f"    overlay app id  : {_c(APP_ID, DIM)}")
 
     snapshots = backup.list_snapshots()
     print(_c("\n  Backups", BOLD))
@@ -336,6 +362,12 @@ def cmd_install_hotkey(args) -> int:
     return install_hotkey(chord_text=args.chord, dry_run=args.dry_run)
 
 
+def cmd_install_rules(args) -> int:
+    from .install import install_rules
+
+    return 1 if install_rules(dry_run=args.dry_run) else 0
+
+
 # --- argument parsing ------------------------------------------------------
 
 
@@ -413,6 +445,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_hotkey.add_argument("--chord", help="chord to use (default: first free candidate)")
     p_hotkey.add_argument("--dry-run", action="store_true", help="show what would change")
     p_hotkey.set_defaults(func=cmd_install_hotkey)
+
+    p_rules = sub.add_parser(
+        "install-rules",
+        help="exempt the overlay from each compositor's tiling layout",
+    )
+    p_rules.add_argument("--dry-run", action="store_true", help="show what would change")
+    p_rules.set_defaults(func=cmd_install_rules)
 
     return parser
 

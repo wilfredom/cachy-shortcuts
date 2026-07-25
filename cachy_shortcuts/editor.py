@@ -11,6 +11,8 @@ the file moves, so comments, ordering and hand-tuned formatting survive.
 
 from __future__ import annotations
 
+import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,6 +87,49 @@ def _commit(
     return EditResult(operation=operation, path=path, snapshot=snapshot, chord=chord)
 
 
+def write_file(
+    path: Path,
+    new_text: str,
+    operation: str,
+    validate,
+) -> EditResult:
+    """The same snapshot/atomic/validate/rollback path, for non-binding files.
+
+    ``_commit`` validates by re-parsing with a backend, which only makes sense
+    for a file full of bindings. The tiling-exception rules live in files that
+    aren't (COSMIC keeps them in a different config context entirely), so the
+    caller supplies the check instead.
+    """
+    existed = path.exists()
+    snapshot = backup.create([path], reason=operation)
+    backup.write_atomic(path, new_text)
+    try:
+        written = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _rollback(snapshot, path, existed)
+        raise EditError(f"cannot re-read {path} after {operation}: {exc}") from exc
+    if not validate(written):
+        _rollback(snapshot, path, existed)
+        raise EditError(f"{operation} did not take effect, rolled back")
+    backup.prune()
+    return EditResult(operation=operation, path=path, snapshot=snapshot)
+
+
+def _rollback(snapshot: backup.Snapshot, path: Path, existed: bool) -> None:
+    """Undo a write, including one that created the file.
+
+    ``backup.create`` skips paths that don't exist yet, so restoring a snapshot
+    of a brand-new file puts nothing back and leaves the bad file in place.
+    Deleting it is the honest rollback in that case.
+    """
+    backup.restore(snapshot)
+    if not existed:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def add(
     backend: Backend,
     chord: Chord,
@@ -138,6 +183,70 @@ def relabel(backend: Backend, shortcut: Shortcut, new_description: str) -> EditR
         new_action=shortcut.action,
         new_description=new_description,
         operation="relabel",
+    )
+
+
+def update(
+    backend: Backend,
+    shortcut: Shortcut,
+    chord: Chord | None = None,
+    action: str | None = None,
+    description: str | None = None,
+) -> EditResult:
+    """Change any combination of chord, action and description in one write.
+
+    The editing form can change all three at once, and doing that as three
+    calls would be wrong rather than merely wasteful: the first write moves
+    every span after it in the file, so the second would be editing bytes that
+    are no longer the binding it was handed.
+    """
+    return _replace(
+        backend,
+        shortcut,
+        new_chord=shortcut.chord if chord is None else chord,
+        new_action=shortcut.action if action is None else action,
+        new_description=(
+            shortcut.description if description is None else description
+        ),
+        operation="update",
+    )
+
+
+def take_over(
+    backend: Backend,
+    victim: Shortcut,
+    target: Shortcut | None,
+    chord: Chord,
+    action: str,
+    description: str = "",
+) -> EditResult:
+    """Give ``chord`` to ``target`` (or to a new binding), unbinding ``victim``.
+
+    Deliberately two writes rather than one. The two bindings can live in
+    different files, and even in the same file removing the victim shifts
+    every span after it -- so the second write has to work from a freshly
+    parsed target, not the stale record the caller is holding.
+    """
+    delete(backend, victim)
+    if target is None:
+        return add(backend, chord, action, description)
+    fresh = _relocate(backend, target)
+    return update(backend, fresh, chord=chord, action=action, description=description)
+
+
+def _relocate(backend: Backend, shortcut: Shortcut) -> Shortcut:
+    """Find ``shortcut`` again in a freshly parsed config."""
+    for candidate in backend.read():
+        if (
+            candidate.chord == shortcut.chord
+            and candidate.action == shortcut.action
+            and candidate.source is not None
+        ):
+            return candidate
+    raise EditError(
+        f"unbound the old claimant, but {shortcut.chord.display()} could not be "
+        "found again afterwards -- check with `cachy-shortcuts list`, or "
+        "`cachy-shortcuts undo` to roll back"
     )
 
 
@@ -253,3 +362,39 @@ def wrap_command_as_action(backend: Backend, command: str) -> str:
     if backend.name == "mango":
         return f"spawn {command}"
     return command
+
+
+_NIRI_SPAWN = re.compile(r"^spawn(?:-sh|_shell)?\s+(.*)$", re.DOTALL)
+_MANGO_SPAWN = re.compile(r"^spawn\s+(.*)$", re.DOTALL)
+_COSMIC_SPAWN = re.compile(r'^Spawn\(\s*"(.*)"\s*\)$', re.DOTALL)
+
+
+def unwrap_action(backend: Backend, action: str) -> str | None:
+    """The bare command inside a spawn action, or None if it isn't one.
+
+    The inverse of ``wrap_command_as_action``, and the reason the edit form
+    can show you ``firefox`` instead of ``spawn-sh "firefox"``. Returning None
+    for a native compositor action (``close-window``, ``Move(Left)``) is what
+    stops the form from re-wrapping one into ``spawn-sh "close-window"`` when
+    you only meant to change its chord.
+    """
+    text = action.strip()
+    if backend.name == "niri":
+        match = _NIRI_SPAWN.match(text)
+        if not match:
+            return None
+        # `spawn "wpctl" "set-volume" "5%+"` is one argument per token, while
+        # `spawn-sh "..."` is a single shell string; joining the unquoted
+        # tokens with spaces reproduces both as something runnable.
+        try:
+            parts = shlex.split(match.group(1))
+        except ValueError:
+            return match.group(1).strip().strip('"')
+        return " ".join(parts)
+    if backend.name == "mango":
+        match = _MANGO_SPAWN.match(text)
+        return match.group(1).strip() if match else None
+    match = _COSMIC_SPAWN.match(text)
+    if not match:
+        return None
+    return match.group(1).replace('\\"', '"').replace("\\\\", "\\")

@@ -279,3 +279,149 @@ class TestCommandWrapping:
     def test_cosmic_render_escapes_embedded_quotes(self, cosmic_rw):
         rendered = cosmic_rw.render(Chord.parse("Super+Z"), 'echo "hi"')
         assert rendered == '(modifiers: [Super], key: "z"): Spawn("echo \\"hi\\""),'
+
+
+class TestUnwrapAction:
+    """The inverse of wrap_command_as_action, so the edit form can show you
+    `firefox` instead of `spawn-sh "firefox"` -- and so that saving a native
+    compositor action back doesn't wrap it into `spawn-sh "close-window"`."""
+
+    def test_niri_spawn_sh_round_trips(self, niri_rw):
+        action = editor.wrap_command_as_action(niri_rw, "firefox --new-window")
+        assert editor.unwrap_action(niri_rw, action) == "firefox --new-window"
+
+    def test_niri_multi_token_spawn_becomes_a_command_line(self, niri_rw):
+        action = 'spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "5%+"'
+        unwrapped = editor.unwrap_action(niri_rw, action)
+        assert unwrapped == "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+
+    def test_niri_native_actions_are_not_spawns(self, niri_rw):
+        assert editor.unwrap_action(niri_rw, "close-window") is None
+        assert editor.unwrap_action(niri_rw, "focus-workspace 1") is None
+        assert editor.unwrap_action(niri_rw, "show-hotkey-overlay") is None
+
+    def test_mango_round_trips(self, mango_rw):
+        action = editor.wrap_command_as_action(mango_rw, "firefox")
+        assert editor.unwrap_action(mango_rw, action) == "firefox"
+        assert editor.unwrap_action(mango_rw, "quit") is None
+
+    def test_cosmic_unwraps_its_spawn_form(self, cosmic_rw):
+        assert editor.unwrap_action(cosmic_rw, 'Spawn("firefox")') == "firefox"
+        assert editor.unwrap_action(cosmic_rw, 'Spawn("echo \\"hi\\"")') == 'echo "hi"'
+        assert editor.unwrap_action(cosmic_rw, "Move(Left)") is None
+
+    def test_an_unbalanced_quote_does_not_raise(self, niri_rw):
+        assert editor.unwrap_action(niri_rw, 'spawn-sh "echo hi') is not None
+
+
+class TestUpdate:
+    """One write for chord + action + description together.
+
+    Doing it as three calls would be wrong, not merely wasteful: the first
+    write moves every span after it, so the second would edit the wrong bytes.
+    """
+
+    def test_all_three_change_in_a_single_write(self, niri_rw):
+        target = by_chord(niri_rw.read())["super+b"]
+        editor.update(
+            niri_rw,
+            target,
+            chord=Chord.parse("Super+Shift+W"),
+            action='spawn-sh "chromium"',
+            description="Web",
+        )
+        updated = by_chord(niri_rw.read())["super+shift+w"]
+        assert updated.action == 'spawn-sh "chromium"'
+        assert updated.description == "Web"
+        assert "super+b" not in by_chord(niri_rw.read())
+
+    def test_omitted_fields_are_left_alone(self, niri_rw):
+        target = by_chord(niri_rw.read())["super+b"]
+        editor.update(niri_rw, target, chord=Chord.parse("Super+Shift+W"))
+        updated = by_chord(niri_rw.read())["super+shift+w"]
+        assert updated.action == target.action
+        assert updated.description == target.description
+
+    def test_neighbouring_bindings_are_untouched(self, niri_rw):
+        before = niri_rw.config_paths()[0].read_text()
+        target = by_chord(niri_rw.read())["super+b"]
+        editor.update(niri_rw, target, description="Web")
+        after = niri_rw.config_paths()[0].read_text()
+        for line in before.splitlines():
+            if "Mod+B " not in line:
+                assert line in after
+
+
+class TestTakeOver:
+    """Claiming a chord something else owns must unbind the old one, not
+    append a duplicate the compositor will silently ignore."""
+
+    def test_a_new_binding_replaces_the_old_claimant(self, niri_rw):
+        victim = by_chord(niri_rw.read())["super+b"]
+        editor.take_over(
+            niri_rw, victim, None, Chord.parse("Super+B"), 'spawn-sh "chromium"', "Web"
+        )
+        after = niri_rw.read()
+        claimants = [s for s in after if s.chord == Chord.parse("Super+B")]
+        assert len(claimants) == 1
+        assert claimants[0].action == 'spawn-sh "chromium"'
+
+    def test_an_existing_binding_can_take_another_chord(self, niri_rw):
+        shortcuts = by_chord(niri_rw.read())
+        victim, target = shortcuts["super+b"], shortcuts["super+e"]
+        editor.take_over(
+            niri_rw, victim, target, Chord.parse("Super+B"), target.action, "Files"
+        )
+        after = by_chord(niri_rw.read())
+        assert "super+e" not in after
+        assert after["super+b"].action == target.action
+        assert after["super+b"].description == "Files"
+
+    def test_the_target_is_relocated_after_the_delete_shifts_spans(self, niri_rw):
+        """The victim sits *before* the target in the file, so every span
+        after it moves. Using the stale record would edit the wrong bytes."""
+        shortcuts = by_chord(niri_rw.read())
+        victim, target = shortcuts["super+return"], shortcuts["super+shift+e"]
+        editor.take_over(
+            niri_rw, victim, target, Chord.parse("Super+Return"), target.action
+        )
+        after = by_chord(niri_rw.read())
+        assert after["super+return"].action == "quit"
+        assert "super+shift+e" not in after
+
+    def test_a_target_that_vanished_is_reported_rather_than_guessed(self, niri_rw):
+        victim = by_chord(niri_rw.read())["super+b"]
+        ghost = by_chord(niri_rw.read())["super+e"]
+        ghost.action = "spawn \"something-that-is-not-in-the-file\""
+        with pytest.raises(editor.EditError, match="could not be found again"):
+            editor.take_over(niri_rw, victim, ghost, Chord.parse("Super+B"), "x")
+
+
+class TestWriteFile:
+    """The snapshot/atomic/validate/rollback path for non-binding files."""
+
+    def test_a_new_file_is_written_and_validated(self, tmp_path):
+        path = tmp_path / "new" / "rules"
+        editor.write_file(path, "hello\n", "test", lambda text: "hello" in text)
+        assert path.read_text() == "hello\n"
+
+    def test_a_failed_validation_removes_a_file_it_created(self, tmp_path):
+        path = tmp_path / "new" / "rules"
+        with pytest.raises(editor.EditError, match="rolled back"):
+            editor.write_file(path, "hello\n", "test", lambda text: False)
+        assert not path.exists()
+
+    def test_a_failed_validation_restores_previous_content(self, tmp_path):
+        path = tmp_path / "rules"
+        path.write_text("original\n")
+        with pytest.raises(editor.EditError, match="rolled back"):
+            editor.write_file(path, "replacement\n", "test", lambda text: False)
+        assert path.read_text() == "original\n"
+
+    def test_the_write_is_undoable(self, tmp_path):
+        path = tmp_path / "rules"
+        path.write_text("original\n")
+        editor.write_file(path, "changed\n", "test", lambda text: True)
+        assert path.read_text() == "changed\n"
+        editor.undo_last()
+        assert path.read_text() == "original\n"

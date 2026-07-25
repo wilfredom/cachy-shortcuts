@@ -22,7 +22,15 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: F401
 PY
+# Checked the same way the overlay loads it: the shared object has to be
+# loadable *before* GTK, or layer-shell silently does nothing at runtime and
+# the overlay gets tiled like an ordinary window.
 python3 - <<'PY' || missing_system_deps+=("gtk4-layer-shell")
+from ctypes import CDLL
+try:
+    CDLL("libgtk4-layer-shell.so.0")
+except OSError:
+    CDLL("libgtk4-layer-shell.so")
 import gi
 gi.require_version("Gtk4LayerShell", "1.0")
 from gi.repository import Gtk4LayerShell  # noqa: F401
@@ -55,11 +63,12 @@ if ! command -v cachy-shortcuts >/dev/null 2>&1; then
 fi
 
 echo
-echo "Registering the overlay's own hotkey..."
+echo "Registering the overlay's own hotkey and tiling exception..."
 cachy-shortcuts install-hotkey || {
-  echo "Hotkey registration didn't fully succeed -- run 'cachy-shortcuts doctor'"
-  echo "to see what was found, then 'cachy-shortcuts install-hotkey --chord ...'"
-  echo "to pick one yourself."
+  echo "Setup didn't fully succeed -- run 'cachy-shortcuts doctor' to see what"
+  echo "was found, then 'cachy-shortcuts install-hotkey --chord ...' to pick a"
+  echo "hotkey yourself, or 'cachy-shortcuts install-rules' to retry just the"
+  echo "tiling exception."
   exit 0
 }
 

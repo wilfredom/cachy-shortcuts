@@ -6,7 +6,7 @@ can't silently steal a binding the user (or Noctalia/DMS) already relies on.
 
 from __future__ import annotations
 
-from . import conflicts, detect, editor
+from . import conflicts, detect, editor, floatrule
 from .backends.base import Backend
 from .model import Chord
 
@@ -76,6 +76,33 @@ def install_hotkey(chord_text: str | None = None, dry_run: bool = False) -> int:
             continue
         print(f"{backend.display_name}: bound {chord.display()}  ({result.path})")
 
+    failures += install_rules(dry_run=dry_run)
+
     if not dry_run and failures == 0:
         print("\nPress your new hotkey to open the overlay.")
     return 1 if failures else 0
+
+
+def install_rules(dry_run: bool = False) -> int:
+    """Add each compositor's tiling exception. Returns the failure count."""
+    backends = detect.detect_installed()
+    if not backends:
+        print("No compositor configs found; no tiling exception to add.")
+        return 1
+
+    failures = 0
+    print("\nTiling exceptions:")
+    for state in floatrule.install_all(backends, dry_run=dry_run):
+        name = state.backend.display_name
+        if state.rule is None:
+            print(f"  {name}: {state.note}")
+        elif state.installed and state.note:
+            print(f"  {name}: {state.note}")
+        elif state.installed:
+            print(f"  {name}: already exempt from tiling ({state.rule.path})")
+        elif dry_run:
+            print(f"  {name}: would add a float rule to {state.rule.path}")
+        else:
+            print(f"  {name}: failed - {state.note}")
+            failures += 1
+    return failures

@@ -6,6 +6,9 @@ Comment=Browse and edit your keyboard shortcuts
 Exec=cachy-shortcuts overlay
 Icon=input-keyboard-symbolic
 Terminal=false
+# Matches the Wayland app_id the overlay sets via GLib.set_prgname(), which is
+# also what the compositor float rules match on.
+StartupWMClass=dev.cachyos.Shortcuts
 Categories=Settings;Utility;
 Keywords=keybinding;shortcut;hotkey;niri;cosmic;mango;
 NoDisplay=false

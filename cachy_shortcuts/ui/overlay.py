@@ -1,80 +1,41 @@
 """GTK4 layer-shell overlay -- the visible half of the tool.
 
-All decision logic (filtering, grouping, selection, the edit state machine)
-lives in ``viewmodel.py`` and is unit-tested there without GTK. This module is
-deliberately thin: it turns GDK key events into viewmodel calls and rebuilds
-widgets from ``model.rows`` after every change.
+All decision logic (filtering, grouping, selection, the edit form) lives in
+``viewmodel.py`` and ``form_model.py`` and is unit-tested there without GTK.
+This module is deliberately thin: it turns GDK key events into model calls and
+paints widgets from the result.
 
 Honest limitation: this file cannot be run or visually verified in the
 container that built it (no Wayland session, no GTK4/gtk4-layer-shell
-installed here). It is written against the documented gtk4-layer-shell API
-and kept as thin as possible over the already-tested viewmodel so that the
-surface area which *can't* be verified by execution is as small as it can be.
-Verify on the real machine with ``cachy-shortcuts doctor`` first (it reports
-whether PyGObject/GTK4/gtk4-layer-shell are actually importable) and then
-``cachy-shortcuts overlay``.
+installed here). It is written against the documented gtk4-layer-shell API and
+kept as thin as possible over the already-tested models, so that the surface
+which *can't* be verified by execution is as small as it can be. Verify on the
+real machine with ``cachy-shortcuts doctor`` first (it reports whether
+layer-shell actually loaded) and then ``cachy-shortcuts overlay``.
 """
 
 from __future__ import annotations
 
-import gi
+# Must come first: it loads libgtk4-layer-shell before GTK pulls in
+# libwayland-client, which is the only order in which layer-shell works. See
+# that module's docstring.
+from . import _layershell
+from ._layershell import Gdk, Gio, GLib, Gtk, LayerShell
 
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, Gio, Gtk  # noqa: E402
-
-try:
-    gi.require_version("Gtk4LayerShell", "1.0")
-    from gi.repository import Gtk4LayerShell as LayerShell  # noqa: E402
-
-    _HAS_LAYER_SHELL = True
-except (ValueError, ImportError):
-    LayerShell = None  # type: ignore[assignment]
-    _HAS_LAYER_SHELL = False
-
-from .. import appscan, cheatsheets, detect, editor, theming
-from ..model import Chord
+from .. import APP_ID, WINDOW_TITLE, appscan, cheatsheets, detect, editor, theming
+from .binding_form import BindingForm
 from .style import stylesheet
 from .viewmodel import Mode, OverlayModel, RowKind
 
-APP_ID = "dev.cachyos.Shortcuts"
+# Fractions of the monitor the panel takes, and the size it falls back to when
+# the monitor's geometry can't be read.
+_PANEL_WIDTH_FRACTION = 0.78
+_PANEL_HEIGHT_FRACTION = 0.76
+_PANEL_MAX_WIDTH = 920
+_PANEL_MIN = (640, 460)
 
-# Modifier bits we treat as chord modifiers. Anything else (Num Lock, Caps
-# Lock's lock bit, etc.) is masked off so it doesn't perturb the chord.
-_MOD_MASK = (
-    Gdk.ModifierType.SHIFT_MASK
-    | Gdk.ModifierType.CONTROL_MASK
-    | Gdk.ModifierType.ALT_MASK
-    | Gdk.ModifierType.SUPER_MASK
-)
-
-_MOD_KEYVAL_NAMES = {
-    "Shift_L", "Shift_R", "Control_L", "Control_R",
-    "Alt_L", "Alt_R", "Super_L", "Super_R", "Meta_L", "Meta_R",
-    "ISO_Level3_Shift", "Caps_Lock", "Num_Lock",
-}
-
-
-def _chord_from_event(keyval: int, state: Gdk.ModifierType) -> Chord | None:
-    """Turn a raw GDK key event into a canonical Chord, or None if it's bare."""
-    name = Gdk.keyval_name(keyval) or ""
-    if name in _MOD_KEYVAL_NAMES:
-        return None  # a modifier on its own is not a complete chord
-    mods: list[str] = []
-    masked = state & _MOD_MASK
-    if masked & Gdk.ModifierType.SUPER_MASK:
-        mods.append("Super")
-    if masked & Gdk.ModifierType.CONTROL_MASK:
-        mods.append("Ctrl")
-    if masked & Gdk.ModifierType.ALT_MASK:
-        mods.append("Alt")
-    if masked & Gdk.ModifierType.SHIFT_MASK:
-        mods.append("Shift")
-    lower = Gdk.keyval_to_lower(keyval)
-    key_name = Gdk.keyval_name(lower) or name
-    try:
-        return Chord.from_parts(mods, key_name)
-    except (KeyError, ValueError):
-        return None
+# How much of the list to keep visible past the selected row when scrolling.
+_SCROLL_MARGIN = 32
 
 
 class OverlayWindow(Gtk.ApplicationWindow):
@@ -82,7 +43,7 @@ class OverlayWindow(Gtk.ApplicationWindow):
         super().__init__(application=app)
         self.add_css_class("cachy-overlay")
         self.set_decorated(False)
-        self.set_title("Keybindings")
+        self.set_title(WINDOW_TITLE)
 
         self.backend = detect.detect_active()
         self._all_backends = detect.detect_installed()
@@ -90,8 +51,8 @@ class OverlayWindow(Gtk.ApplicationWindow):
             self.backend = self._all_backends[0]
 
         self.model = OverlayModel()
-        self._app_suggestions: list[appscan.DesktopApp] = []
-        self._suggestion_index = 0
+        self._row_widgets: dict[int, Gtk.Widget] = {}
+        self._scroll_pending = False
 
         self._build_ui()
         self._apply_theme()
@@ -120,18 +81,20 @@ class OverlayWindow(Gtk.ApplicationWindow):
         self.model.set_shortcuts(shortcuts)
 
     def _setup_layer_shell(self) -> None:
-        if not _HAS_LAYER_SHELL or not LayerShell.is_supported():
-            # Plain centered window fallback (e.g. running nested, or a
-            # compositor without wlr-layer-shell). Still fully usable.
-            self.set_default_size(720, 560)
+        if not _layershell.available():
+            # No layer-shell: an ordinary toplevel, which a tiling compositor
+            # will lay out unless `cachy-shortcuts install-rules` has added a
+            # float rule. Going fullscreen means that even then it covers the
+            # screen rather than landing in a column.
+            self.set_default_size(*_PANEL_MIN)
+            self.fullscreen()
             return
         LayerShell.init_for_window(self)
         LayerShell.set_namespace(self, "cachy-shortcuts")
         LayerShell.set_layer(self, LayerShell.Layer.OVERLAY)
-        # Anchor to every edge so the (transparent) surface spans the output;
-        # the visible panel is centered *within* it by widget alignment. This
-        # is what makes the backdrop click-through-free without reserving any
-        # screen space itself.
+        # Anchor to every edge so the surface spans the output; the visible
+        # panel is centered *within* it by widget alignment, and the rest is
+        # the dimming scrim.
         for edge in (
             LayerShell.Edge.LEFT,
             LayerShell.Edge.RIGHT,
@@ -143,7 +106,7 @@ class OverlayWindow(Gtk.ApplicationWindow):
         LayerShell.set_exclusive_zone(self, -1)
 
     def _set_keyboard_exclusive(self, exclusive: bool) -> None:
-        if not _HAS_LAYER_SHELL or not LayerShell.is_supported():
+        if not _layershell.available():
             return
         mode = (
             LayerShell.KeyboardMode.EXCLUSIVE
@@ -154,6 +117,9 @@ class OverlayWindow(Gtk.ApplicationWindow):
 
     def _on_visibility_changed(self, *_args) -> None:
         if self.get_visible():
+            # Scanning .desktop files touches every applications directory, so
+            # it happens once per opening and the form re-ranks the cache.
+            self.model.apps = appscan.scan()
             self._reload()
             self.model.cancel()
             self.search_entry.set_text("")
@@ -178,59 +144,80 @@ class OverlayWindow(Gtk.ApplicationWindow):
 
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("panel")
-        panel.set_size_request(680, 500)
+        panel.set_size_request(*self._panel_size())
         outer.append(panel)
         self.panel = panel
 
         header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        header_row.set_margin_top(4)
-        self.header_label = Gtk.Label(label=self.model.header())
+        self.header_label = Gtk.Label(label=self.model.header(), xalign=0)
         self.header_label.add_css_class("context")
-        self.header_label.set_halign(Gtk.Align.START)
+        self.header_label.set_hexpand(True)
         header_row.append(self.header_label)
+        self.count_label = Gtk.Label(label="", xalign=1)
+        self.count_label.add_css_class("count")
+        header_row.append(self.count_label)
         panel.append(header_row)
 
-        self.search_revealer = Gtk.Revealer()
-        self.search_revealer.set_transition_type(
-            Gtk.RevealerTransitionType.SLIDE_DOWN
-        )
         self.search_entry = Gtk.Entry()
         self.search_entry.add_css_class("search")
         self.search_entry.set_placeholder_text("Type to search…")
         self.search_entry.connect("changed", self._on_search_changed)
-        self.search_revealer.set_child(self.search_entry)
-        panel.append(self.search_revealer)
+        panel.append(self.search_entry)
 
-        self.command_entry = Gtk.Entry()
-        self.command_entry.add_css_class("search")
-        self.command_entry.set_visible(False)
-        self.command_entry.connect("changed", self._on_command_changed)
-        panel.append(self.command_entry)
-
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_vexpand(True)
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_vexpand(True)
+        self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.list_box = Gtk.ListBox()
         self.list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        scroller.set_child(self.list_box)
-        panel.append(scroller)
+        self.scroller.set_child(self.list_box)
+        panel.append(self.scroller)
 
-        self.status_label = Gtk.Label(label="")
+        # The form replaces the list while it is open, rather than sitting
+        # alongside it: one screen at a time is what makes the keyboard rules
+        # unambiguous.
+        self.form = BindingForm(on_save=self._save_draft, on_cancel=self._cancel_form)
+        self.form.set_vexpand(True)
+        self.form.set_visible(False)
+        panel.append(self.form)
+
+        self.status_label = Gtk.Label(label="", xalign=0)
         self.status_label.add_css_class("status")
-        self.status_label.set_halign(Gtk.Align.START)
         self.status_label.set_wrap(True)
         self.status_label.set_visible(False)
         panel.append(self.status_label)
 
-        self.hint_label = Gtk.Label(label=self.model.hint())
+        self.hint_label = Gtk.Label(label=self.model.hint(), xalign=0)
         self.hint_label.add_css_class("hint")
-        self.hint_label.set_halign(Gtk.Align.START)
         panel.append(self.hint_label)
+
+    def _panel_size(self) -> tuple[int, int]:
+        """Size the panel to the monitor rather than to a guess."""
+        width, height = _PANEL_MIN
+        display = Gdk.Display.get_default()
+        if display is None:
+            return (width, height)
+        try:
+            monitors = display.get_monitors()
+            monitor = monitors.get_item(0) if monitors.get_n_items() else None
+            if monitor is None:
+                return (width, height)
+            area = monitor.get_geometry()
+        except Exception:  # noqa: BLE001 - a headless display must not crash us
+            return (width, height)
+        width = min(_PANEL_MAX_WIDTH, int(area.width * _PANEL_WIDTH_FRACTION))
+        height = int(area.height * _PANEL_HEIGHT_FRACTION)
+        return (max(width, _PANEL_MIN[0]), max(height, _PANEL_MIN[1]))
 
     def _apply_theme(self) -> None:
         palette = theming.current_palette(self.backend.name if self.backend else None)
         provider = Gtk.CssProvider()
-        provider.load_from_string(stylesheet(palette))
+        css = stylesheet(palette)
+        # load_from_string arrived in GTK 4.12; load_from_data is the older
+        # spelling and still present.
+        if hasattr(provider, "load_from_string"):
+            provider.load_from_string(css)
+        else:
+            provider.load_from_data(css.encode("utf-8"))
         display = Gdk.Display.get_default()
         if display is not None:
             Gtk.StyleContext.add_provider_for_display(
@@ -240,39 +227,57 @@ class OverlayWindow(Gtk.ApplicationWindow):
     # --- rendering ---------------------------------------------------------
 
     def _render(self) -> None:
+        """Full repaint: use after the data or the mode changed."""
+        in_form = self.model.mode is Mode.FORM
         self.header_label.set_label(self.model.header())
         self.hint_label.set_label(self.model.hint())
 
-        conflict_mode = self.model.mode in (Mode.CAPTURE_CHORD, Mode.EDIT_COMMAND)
-        has_conflict = conflict_mode and self.model.pending_chord is not None and (
-            self.model.conflict_for(self.model.pending_chord) is not None
-        )
-        self.status_label.remove_css_class("conflict")
-        if has_conflict:
-            self.status_label.add_css_class("conflict")
+        self.search_entry.set_visible(not in_form)
+        self.scroller.set_visible(not in_form)
+        self.form.set_visible(in_form)
+        self.count_label.set_label("" if in_form else self._count_text())
 
         if self.model.status:
             self.status_label.set_label(self.model.status)
             self.status_label.set_visible(True)
         else:
             self.status_label.set_visible(False)
+        wants_warning = self.model.mode is Mode.CONFIRM_DELETE
+        if wants_warning and not self.status_label.has_css_class("conflict"):
+            self.status_label.add_css_class("conflict")
+        elif not wants_warning and self.status_label.has_css_class("conflict"):
+            self.status_label.remove_css_class("conflict")
 
-        self.search_revealer.set_reveal_child(bool(self.model.query))
-        self.command_entry.set_visible(self.model.mode is Mode.EDIT_COMMAND)
-        if self.model.mode is Mode.EDIT_COMMAND:
-            if self.command_entry.get_text() != self.model.draft_command:
-                self.command_entry.set_text(self.model.draft_command)
+        if in_form:
+            self.form.open(self.model.draft)
+        else:
+            self._rebuild_rows()
 
-        self._clear_rows()
-        for index, row in enumerate(self.model.rows):
-            self.list_box.append(self._build_row(index, row))
+    def _count_text(self) -> str:
+        total = self.model.count()
+        return f"{total} binding" + ("" if total == 1 else "s")
 
-    def _clear_rows(self) -> None:
+    def _rebuild_rows(self) -> None:
         child = self.list_box.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self.list_box.remove(child)
             child = nxt
+        self._row_widgets = {}
+
+        if not self.model.rows:
+            empty = Gtk.Label(label="Nothing bound here yet.", xalign=0)
+            empty.add_css_class("empty")
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            row.set_activatable(False)
+            row.set_child(empty)
+            self.list_box.append(row)
+            return
+
+        for index, row in enumerate(self.model.rows):
+            self.list_box.append(self._build_row(index, row))
+        self._refresh_selection()
 
     def _build_row(self, index: int, row) -> Gtk.ListBoxRow:
         list_row = Gtk.ListBoxRow()
@@ -280,48 +285,97 @@ class OverlayWindow(Gtk.ApplicationWindow):
         list_row.set_activatable(False)
 
         if row.kind is RowKind.SECTION:
-            label = Gtk.Label(label=row.title)
+            label = Gtk.Label(label=row.title, xalign=0)
             label.add_css_class("section")
-            label.set_halign(Gtk.Align.START)
             list_row.set_child(label)
             return list_row
 
+        if row.kind is RowKind.CREATE:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            box.add_css_class("create-row")
+            label = Gtk.Label(label=f"＋  Bind “{row.title}”…", xalign=0)
+            label.add_css_class("create-label")
+            box.append(label)
+            list_row.set_child(box)
+            self._row_widgets[index] = box
+            return list_row
+
         shortcut = row.shortcut
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         box.add_css_class("row")
         if shortcut.extras.get("disabled"):
             box.add_css_class("disabled")
-        if index == self.model.selected:
-            box.add_css_class("selected")
 
-        # While capturing, show the pending chord in place of the row being
-        # rebound, so the live conflict feedback reads against what it will
-        # actually become rather than what it currently is.
-        display_chord = shortcut.chord.display()
-        if (
-            self.model.mode is Mode.CAPTURE_CHORD
-            and self.model.pending_chord is not None
-            and shortcut is self.model.editing_target
-        ):
-            display_chord = self.model.pending_chord.display()
-
-        chord_label = Gtk.Label(label=display_chord)
+        chord_label = Gtk.Label(label=shortcut.chord.display(), xalign=0)
         chord_label.add_css_class("chord")
-        chord_label.set_halign(Gtk.Align.START)
-        chord_label.set_size_request(220, -1)
+        chord_label.set_size_request(200, -1)
         box.append(chord_label)
 
         arrow = Gtk.Label(label="→")
-        arrow.add_css_class("desc")
+        arrow.add_css_class("arrow")
         box.append(arrow)
 
-        desc_label = Gtk.Label(label=shortcut.label)
+        desc_label = Gtk.Label(label=shortcut.label, xalign=0)
         desc_label.add_css_class("desc")
-        desc_label.set_halign(Gtk.Align.START)
+        desc_label.set_hexpand(True)
         box.append(desc_label)
 
+        # No source span means an app cheat-sheet entry, which this tool does
+        # not own. Saying so up front beats refusing after an edit is typed.
+        if shortcut.source is None:
+            badge = Gtk.Label(label="reference")
+            badge.add_css_class("badge")
+            box.append(badge)
+
         list_row.set_child(box)
+        self._row_widgets[index] = box
         return list_row
+
+    def _refresh_selection(self) -> None:
+        """Selection-only repaint: no teardown, so arrow keys stay cheap."""
+        for index, widget in self._row_widgets.items():
+            wanted = index == self.model.selected
+            if wanted and not widget.has_css_class("selected"):
+                widget.add_css_class("selected")
+            elif not wanted and widget.has_css_class("selected"):
+                widget.remove_css_class("selected")
+        self._scroll_selected_into_view()
+
+    def _scroll_selected_into_view(self) -> None:
+        """Keep the selected row inside the viewport.
+
+        A GtkListBox in NONE selection mode scrolls for the wheel and for
+        nothing else, so moving the selection with the keyboard has to move
+        the adjustment by hand. Deferred to an idle callback because a row
+        added in this same frame has no allocation to measure yet.
+        """
+        if self._scroll_pending:
+            return
+        self._scroll_pending = True
+
+        def run() -> bool:
+            self._scroll_pending = False
+            widget = self._row_widgets.get(self.model.selected)
+            if widget is None:
+                return False
+            ok, bounds = widget.compute_bounds(self.list_box)
+            if not ok:
+                return False
+            adjustment = self.scroller.get_vadjustment()
+            page = adjustment.get_page_size()
+            if page <= 0:
+                return False
+            value = adjustment.get_value()
+            top = bounds.origin.y - _SCROLL_MARGIN
+            bottom = bounds.origin.y + bounds.size.height + _SCROLL_MARGIN
+            if top < value:
+                adjustment.set_value(max(0.0, top))
+            elif bottom > value + page:
+                upper = max(0.0, adjustment.get_upper() - page)
+                adjustment.set_value(min(upper, bottom - page))
+            return False
+
+        GLib.idle_add(run)
 
     # --- search ------------------------------------------------------------
 
@@ -329,13 +383,8 @@ class OverlayWindow(Gtk.ApplicationWindow):
         if self.model.mode is not Mode.BROWSE:
             return
         self.model.set_query(entry.get_text())
-        self._render()
-
-    def _on_command_changed(self, entry: Gtk.Entry) -> None:
-        if self.model.mode is not Mode.EDIT_COMMAND:
-            return
-        self.model.draft_command = entry.get_text()
-        self._app_suggestions = []
+        self.count_label.set_label(self._count_text())
+        self._rebuild_rows()
 
     # --- input ---------------------------------------------------------
 
@@ -343,159 +392,123 @@ class OverlayWindow(Gtk.ApplicationWindow):
         name = Gdk.keyval_name(keyval) or ""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
-        if self.model.mode is Mode.CAPTURE_CHORD:
-            return self._handle_capture_key(keyval, state, name)
-        if self.model.mode is Mode.EDIT_COMMAND:
-            return self._handle_command_key(keyval, state, name)
+        if self.model.mode is Mode.FORM:
+            return self.form.handle_key(keyval, state, name, ctrl)
         if self.model.mode is Mode.CONFIRM_DELETE:
             return self._handle_delete_key(name)
         return self._handle_browse_key(name, ctrl)
 
     def _handle_browse_key(self, name: str, ctrl: bool) -> bool:
         if name == "Escape":
+            # Esc backs out of a search before it closes the overlay, so a
+            # mistyped query doesn't cost you the whole window.
+            if self.search_entry.get_text():
+                self.search_entry.set_text("")
+                return True
             self.close_overlay()
             return True
-        if name == "Up":
-            self.model.move(-1)
-            self._render()
+        if name in ("Up", "Down", "Page_Up", "Page_Down"):
+            self._move_selection(name)
             return True
-        if name == "Down":
-            self.model.move(1)
-            self._render()
+        if name in ("Home", "End"):
+            # Only jump the list when there's no query: with text in the search
+            # box these belong to the cursor, and stealing them there would be
+            # rude in a way PgUp/PgDn never is.
+            if self.search_entry.get_text():
+                return False
+            self._move_selection(name)
             return True
-        if name == "Return" and ctrl:
-            if self.model.begin_command_edit():
+        if name in ("Return", "KP_Enter"):
+            if self.model.activate(unwrap=self._unwrap):
                 self._render()
-            return True
-        if name == "Return":
-            if self.model.begin_capture():
-                self._render()
+            else:
+                self._render()  # a status may have been set (reference rows)
             return True
         if ctrl and name.lower() == "n":
-            if self.model.begin_add():
-                self._render()
+            self.model.begin_add()
+            self._render()
             return True
         if ctrl and name.lower() == "d":
-            if self.model.begin_delete():
-                self._render()
+            self.model.begin_delete()
+            self._render()
             return True
-        # `n`/`d` are only mnemonics while the search box is empty: once a
-        # query is in progress those letters are just letters (you can still
-        # search for "nautilus" or "discord"), and Ctrl+N / Ctrl+D above
-        # remain the reliable path regardless of query state.
-        if not self.model.query:
-            if name.lower() == "n":
-                if self.model.begin_add():
-                    self._render()
-                return True
-            if name.lower() == "d":
-                if self.model.begin_delete():
-                    self._render()
-                return True
         return False  # let it fall through to the search entry
 
-    def _handle_capture_key(self, keyval: int, state, name: str) -> bool:
-        if name == "Escape":
-            self.model.cancel()
-            self._render()
-            return True
-        if name == "Return" and self.model.pending_chord is not None:
-            self._commit_capture()
-            return True
-        chord = _chord_from_event(keyval, state)
-        if chord is None:
-            return True  # swallow bare modifier presses, keep waiting
-        self.model.capture(chord)
-        self._render()
-        return True
+    def _move_selection(self, name: str) -> None:
+        if name == "Up":
+            self.model.move(-1)
+        elif name == "Down":
+            self.model.move(1)
+        elif name == "Page_Up":
+            self.model.move_page(-1)
+        elif name == "Page_Down":
+            self.model.move_page(1)
+        elif name == "Home":
+            self.model.move_to_edge(-1)
+        else:
+            self.model.move_to_edge(1)
+        self._refresh_selection()
 
-    def _commit_capture(self) -> None:
-        chord = self.model.pending_chord
-        target = self.model.editing_target
-        if chord is None or self.backend is None:
-            self.model.cancel()
-            self._render()
-            return
-        try:
-            if target is None:
-                # A brand-new binding needs a command next.
-                self.model.mode = Mode.EDIT_COMMAND
-                self.model.draft_command = ""
-                self.model.status = "Type a command or pick an app…  Esc to cancel"
-                self._app_suggestions = []
-                self._render()
-                self.command_entry.grab_focus()
-                return
-            editor.rebind(self.backend, target, chord)
-        except editor.EditError as exc:
-            self.model.status = str(exc)
-            self._render()
-            return
+    def _unwrap(self, action: str) -> str | None:
+        if self.backend is None:
+            return None
+        return editor.unwrap_action(self.backend, action)
+
+    # --- committing --------------------------------------------------------
+
+    def _cancel_form(self) -> None:
         self.model.cancel()
-        self._reload()
         self._render()
         self.search_entry.grab_focus()
 
-    def _handle_command_key(self, keyval: int, state, name: str) -> bool:
-        if name == "Escape":
-            self.model.cancel()
-            self._app_suggestions = []
-            self._render()
-            self.search_entry.grab_focus()
-            return True
-        if name == "Tab":
-            self._cycle_app_suggestion()
-            return True
-        if name == "Return":
-            self._commit_command()
-            return True
-        return False  # let the command entry handle normal typing
-
-    def _cycle_app_suggestion(self) -> None:
-        query = self.command_entry.get_text().strip()
-        if not self._app_suggestions:
-            self._app_suggestions = appscan.search(query, limit=8) if query else []
-            self._suggestion_index = 0
-        if not self._app_suggestions:
-            return
-        app = self._app_suggestions[self._suggestion_index % len(self._app_suggestions)]
-        self._suggestion_index += 1
-        self.command_entry.set_text(app.command)
-        self.command_entry.set_position(-1)
-        if not self.model.draft_command:
-            self.model.draft_command = app.command
-
-    def _commit_command(self) -> None:
-        command = self.command_entry.get_text().strip()
-        if not command or self.backend is None:
-            self.model.cancel()
+    def _save_draft(self, draft) -> None:
+        if self.backend is None:
+            self.model.status = "No compositor config to write to."
             self._render()
             return
-        chord = self.model.pending_chord
-        target = self.model.editing_target
-        action = editor.wrap_command_as_action(self.backend, command)
+        action = (
+            editor.wrap_command_as_action(self.backend, draft.command)
+            if draft.spawns
+            else draft.command.strip()
+        )
+        victim = draft.claimant() if draft.replace_confirmed else None
         try:
-            if target is None and chord is not None:
-                editor.add(self.backend, chord, action)
-            elif target is not None:
-                editor.retarget(self.backend, target, action)
+            if victim is not None:
+                editor.take_over(
+                    self.backend,
+                    victim,
+                    draft.target,
+                    draft.chord,
+                    action,
+                    draft.description,
+                )
+            elif draft.target is None:
+                editor.add(self.backend, draft.chord, action, draft.description)
+            else:
+                editor.update(
+                    self.backend,
+                    draft.target,
+                    chord=draft.chord,
+                    action=action,
+                    description=draft.description,
+                )
         except editor.EditError as exc:
             self.model.status = str(exc)
-            self._render()
+            self.form.refresh()
+            self.status_label.set_label(self.model.status)
+            self.status_label.set_visible(True)
             return
         self.model.cancel()
-        self._app_suggestions = []
         self._reload()
         self._render()
         self.search_entry.grab_focus()
 
     def _handle_delete_key(self, name: str) -> bool:
         if name == "Escape":
-            self.model.cancel()
-            self._render()
+            self._cancel_form()
             return True
         if name.lower() == "y":
-            target = self.model.editing_target
+            target = self.model.delete_target
             if target is not None and self.backend is not None:
                 try:
                     editor.delete(self.backend, target)
@@ -517,6 +530,10 @@ class OverlayApplication(Gtk.Application):
             application_id=APP_ID,
             flags=Gio.ApplicationFlags.FLAGS_NONE,
         )
+        # GTK takes the Wayland app_id from the program name, not from the
+        # application id, so without this the compositor sees "cachy-shortcuts"
+        # and every window rule matching dev.cachyos.Shortcuts misses.
+        GLib.set_prgname(APP_ID)
         self._toggle = toggle
         self.window: OverlayWindow | None = None
 
@@ -533,3 +550,8 @@ class OverlayApplication(Gtk.Application):
 def run(toggle: bool = True) -> int:
     app = OverlayApplication(toggle=toggle)
     return app.run(None)
+
+
+# Re-exported for callers that only want to know whether the overlay can be a
+# real overlay; `cachy-shortcuts doctor` reports it.
+layer_shell_status = _layershell.status

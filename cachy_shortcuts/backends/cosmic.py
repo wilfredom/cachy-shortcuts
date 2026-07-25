@@ -17,9 +17,10 @@ import os
 import re
 from pathlib import Path
 
+from .. import APP_IDS, RULE_MARKER, WINDOW_TITLE
 from ..model import Chord, Shortcut, SourceRef, infer_category
 from ._kdl import Scanner
-from .base import Backend
+from .base import Backend, FloatRule
 
 _MODIFIERS_RE = re.compile(r"modifiers\s*:\s*\[([^\]]*)\]")
 _KEY_RE = re.compile(r'key\s*:\s*"([^"]*)"')
@@ -46,6 +47,7 @@ class CosmicBackend(Backend):
     display_name = "COSMIC"
 
     _RELATIVE = Path("cosmic/com.system76.CosmicSettings.Shortcuts/v1")
+    _RULES_RELATIVE = Path("cosmic/com.system76.CosmicSettings.WindowRules/v1")
 
     def __init__(
         self, config_root: Path | None = None, system_root: Path | None = None
@@ -55,6 +57,7 @@ class CosmicBackend(Backend):
         )
         self._custom = base / self._RELATIVE / "custom"
         self._defaults = (system_root or Path("/usr/share")) / self._RELATIVE / "defaults"
+        self._tiling_exceptions = base / self._RULES_RELATIVE / "tiling_exception_custom"
 
     def config_paths(self) -> list[Path]:
         # Custom first: it is the only writable one.
@@ -176,6 +179,34 @@ class CosmicBackend(Backend):
     def write_target(self) -> Path:
         """COSMIC edits always go to the user's custom file, never defaults."""
         return self._custom
+
+    def float_rule(self) -> FloatRule | None:
+        """A COSMIC tiling exception -- its own name for exactly this.
+
+        These live in their own config context, not the shortcuts one, as a RON
+        list of ``( enabled: true, appid: ..., title: ... )`` entries. This is
+        the same file COSMIC Settings writes from Desktop -> Window Management
+        -> Tiling exceptions, and cosmic-settings-daemon watches it, so an
+        added rule applies without a logout.
+        """
+        # Both an empty and a literal title per app id. COSMIC's own Settings
+        # writes appid and title together, and whether an empty title means
+        # "any title" or "a window whose title is empty" isn't documented
+        # anywhere I could check -- emitting both forms matches under either
+        # reading, and this file is a list of exceptions anyway.
+        entries = "\n".join(
+            f'    ( enabled: true, appid: "{_escape(app_id)}",'
+            f' title: "{_escape(title)}" ),  // {RULE_MARKER}'
+            for app_id in APP_IDS
+            for title in ("", WINDOW_TITLE)
+        )
+        return FloatRule(
+            backend=self.name,
+            path=self._tiling_exceptions,
+            body=entries,
+            marker=f"// {RULE_MARKER}",
+            mode="ron-list",
+        )
 
     def reload(self) -> None:
         # cosmic-settings-daemon watches the config; nothing to trigger.
