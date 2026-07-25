@@ -3,6 +3,8 @@
 An editable, searchable keybinding atlas for CachyOS — one overlay, one
 hotkey, across COSMIC, Niri, and MangoWM.
 
+<img width="995" height="868" alt="cachy-shortcuts" src="https://github.com/user-attachments/assets/dd047562-2226-4f28-b6a5-bb65b534acd8" />
+
 Read-only cheat sheets already exist for this (Omarchy's keybindings overlay,
 Niri's built-in `show-hotkey-overlay`, Noctalia's `keybind-cheatsheet`). What
 none of them do is let you *change* a binding from inside the overlay, and
