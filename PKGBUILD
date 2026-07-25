@@ -21,10 +21,12 @@ depends=(
 optdepends=(
   'python-yaml: more forgiving parsing of cheat-sheet packs'
   'niri: keybinding backend'
-  'mangowc: keybinding backend'
+  'mangowm: keybinding backend'
   'cosmic-session: keybinding backend'
 )
-makedepends=('python-build' 'python-installer' 'python-wheel')
+# python-setuptools is required: the build uses --no-isolation, so the
+# build backend declared in pyproject.toml must be importable system-wide.
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 source=()
 sha256sums=()
 

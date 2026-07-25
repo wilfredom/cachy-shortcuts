@@ -16,6 +16,13 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 -m pip --version >/dev/null 2>&1; then
+  echo "error: pip not found for python3." >&2
+  echo "On CachyOS/Arch, prefer the PKGBUILD instead: makepkg -si" >&2
+  echo "(or install pip first: sudo pacman -S python-pip)" >&2
+  exit 1
+fi
+
 missing_system_deps=()
 python3 - <<'PY' || missing_system_deps+=("python-gobject / gtk4")
 import gi
