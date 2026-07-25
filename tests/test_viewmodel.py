@@ -151,60 +151,93 @@ class TestSelection:
         assert model.current().label == "Browser"
 
 
-class TestEditStateMachine:
-    def test_begin_capture_requires_a_selection(self, isolated_usage):
+class TestPagedNavigation:
+    def test_page_down_moves_further_than_one_row(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.move_page(1, page=2)
+        assert model.selectable_indexes.index(model.selected) == 2
+
+    def test_paging_clamps_at_the_ends(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.move_page(1, page=99)
+        assert model.selected == model.selectable_indexes[-1]
+        model.move_page(-1, page=99)
+        assert model.selected == model.selectable_indexes[0]
+
+    def test_end_and_home_jump_to_the_edges(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.move_to_edge(1)
+        assert model.selected == model.selectable_indexes[-1]
+        model.move_to_edge(-1)
+        assert model.selected == model.selectable_indexes[0]
+
+    def test_edges_on_an_empty_model_do_not_crash(self, isolated_usage):
         model = OverlayModel(shortcuts=[])
-        assert model.begin_capture() is False
-        assert model.mode is Mode.BROWSE
+        model.move_to_edge(1)
+        model.move_page(1)
+        assert model.current() is None
 
-    def test_begin_capture_switches_mode(self, sample, isolated_usage):
+
+class TestCreateRow:
+    def test_a_search_with_no_matches_offers_to_create(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        assert model.begin_capture() is True
-        assert model.mode is Mode.CAPTURE_CHORD
+        model.set_query("obsidian")
+        assert model.rows[-1].kind is RowKind.CREATE
+        assert model.rows[-1].title == "obsidian"
 
-    def test_capture_reports_no_conflict_for_a_free_chord(self, sample, isolated_usage):
+    def test_no_create_row_when_something_matched(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.begin_capture()
-        claim = model.capture(Chord.parse("Super+Z"))
-        assert claim is None
-        assert "free" in model.status
+        model.set_query("firefox")
+        assert all(r.kind is not RowKind.CREATE for r in model.rows)
 
-    def test_capture_reports_conflict_for_a_taken_chord(self, sample, isolated_usage):
+    def test_no_create_row_without_a_query(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.set_query("terminal")  # select something other than Super+B
-        model.begin_capture()
-        claim = model.capture(Chord.parse("Super+B"))
-        assert claim is not None
-        assert "SUPER + B" in model.status
+        assert all(r.kind is not RowKind.CREATE for r in model.rows)
 
-    def test_capturing_the_current_shortcuts_own_chord_is_not_a_self_conflict(
+    def test_the_create_row_is_selectable_and_activating_it_opens_a_draft(
         self, sample, isolated_usage
     ):
         model = OverlayModel(shortcuts=sample)
-        model.set_query("firefox")  # select Super+B itself
-        model.begin_capture()
-        claim = model.capture(Chord.parse("Super+B"))
-        assert claim is None
+        model.set_query("obsidian")
+        assert model.current_row().kind is RowKind.CREATE
+        assert model.activate() is True
+        assert model.mode is Mode.FORM
+        assert model.draft.is_new
+        assert model.draft.command == "obsidian"
 
-    def test_cancel_returns_to_browse(self, sample, isolated_usage):
+    def test_the_create_row_is_not_counted_as_a_binding(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.begin_capture()
-        model.capture(Chord.parse("Super+Z"))
-        model.cancel()
+        model.set_query("obsidian")
+        assert model.count() == 0
+
+
+class TestOpeningTheForm:
+    def test_begin_edit_requires_a_selection(self, isolated_usage):
+        model = OverlayModel(shortcuts=[])
+        assert model.begin_edit() is False
         assert model.mode is Mode.BROWSE
-        assert model.pending_chord is None
-        assert model.status == ""
 
-    def test_begin_command_edit_seeds_the_draft(self, sample, isolated_usage):
+    def test_begin_edit_seeds_the_draft_from_the_selection(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.begin_command_edit()
-        assert model.mode is Mode.EDIT_COMMAND
-        assert model.draft_command == model.current().action
+        model.set_query("firefox")
+        assert model.begin_edit() is True
+        assert model.mode is Mode.FORM
+        assert model.draft.target is model.current()
+        assert model.draft.chord == Chord.parse("Super+B")
 
-    def test_begin_delete_asks_for_confirmation(self, sample, isolated_usage):
+    def test_begin_edit_unwraps_the_action_when_told_how(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.begin_delete()
-        assert model.mode is Mode.CONFIRM_DELETE
+        model.set_query("firefox")
+        model.begin_edit(unwrap=lambda action: action.replace("spawn ", ""))
+        assert model.draft.command == "firefox"
+        assert model.draft.spawns is True
+
+    def test_a_native_action_is_not_treated_as_a_spawn(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.set_query("close-window")
+        model.begin_edit(unwrap=lambda action: None)
+        assert model.draft.command == "close-window"
+        assert model.draft.spawns is False
 
     def test_begin_add_is_independent_of_the_current_selection(
         self, sample, isolated_usage
@@ -212,43 +245,38 @@ class TestEditStateMachine:
         model = OverlayModel(shortcuts=sample)
         model.set_query("firefox")  # select Super+B
         assert model.begin_add() is True
-        assert model.editing_target is None
-        # Capturing Super+B (the selected row's own chord) must still report
-        # a conflict, because we are adding a *new* binding, not rebinding
-        # the selected one.
-        claim = model.capture(Chord.parse("Super+B"))
-        assert claim is not None
+        assert model.draft.target is None
+        # Super+B is the selected row's own chord, but this is a *new*
+        # binding, so nothing is excluded from the conflict check.
+        model.draft.capture(Chord.parse("Super+B"))
+        assert model.draft.claimant() is not None
 
     def test_begin_add_works_with_nothing_selected(self, isolated_usage):
         model = OverlayModel(shortcuts=[])
         assert model.begin_add() is True
-        assert model.mode is Mode.CAPTURE_CHORD
+        assert model.mode is Mode.FORM
 
-    def test_begin_capture_excludes_only_the_target_being_rebound(
-        self, sample, isolated_usage
-    ):
+    def test_begin_delete_asks_for_confirmation(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.set_query("firefox")  # select Super+B
-        model.begin_capture()
-        assert model.editing_target.label == "Browser"
-        # Recapturing the same chord the target already owns is not a
-        # self-conflict.
-        assert model.capture(Chord.parse("Super+B")) is None
-        # But claiming a *different* existing chord still conflicts.
-        assert model.capture(Chord.parse("Super+Q")) is not None
+        model.begin_delete()
+        assert model.mode is Mode.CONFIRM_DELETE
+        assert model.delete_target is model.current()
 
-    def test_cancel_clears_editing_target(self, sample, isolated_usage):
+    def test_cancel_returns_to_browse_and_drops_the_draft(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
-        model.begin_capture()
+        model.begin_add()
         model.cancel()
-        assert model.editing_target is None
+        assert model.mode is Mode.BROWSE
+        assert model.draft is None
+        assert model.delete_target is None
+        assert model.status == ""
 
 
 class TestHintsAndHeader:
     def test_hint_changes_per_mode(self, sample, isolated_usage):
         model = OverlayModel(shortcuts=sample)
         browse_hint = model.hint()
-        model.begin_capture()
+        model.begin_add()
         assert model.hint() != browse_hint
 
     def test_header_shows_app_context_when_set(self, sample, isolated_usage):

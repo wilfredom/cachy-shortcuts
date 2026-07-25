@@ -1,7 +1,8 @@
-"""Overlay state, with no GTK in sight.
+"""Browse state for the overlay, with no GTK in sight.
 
-Filtering, grouping, selection and the edit state machine all live here so
-they can be tested headlessly. The GTK layer is a thin renderer over this.
+Filtering, grouping and selection live here so they can be tested headlessly.
+Editing used to live here too; it now lives in ``form_model.BindingDraft``,
+which this module opens and closes but does not otherwise know about.
 """
 
 from __future__ import annotations
@@ -9,20 +10,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from .. import conflicts, usage
-from ..model import Category, Chord, Shortcut
+from .. import usage
+from ..appscan import DesktopApp
+from ..model import Category, Shortcut
+from .form_model import BindingDraft
 
 
 class Mode(Enum):
     BROWSE = auto()
-    CAPTURE_CHORD = auto()
-    EDIT_COMMAND = auto()
+    FORM = auto()
     CONFIRM_DELETE = auto()
 
 
 class RowKind(Enum):
     SECTION = auto()
     SHORTCUT = auto()
+    # "Bind <query>…" -- the way out of a search that found nothing.
+    CREATE = auto()
 
 
 @dataclass
@@ -33,7 +37,7 @@ class Row:
 
     @property
     def selectable(self) -> bool:
-        return self.kind is RowKind.SHORTCUT
+        return self.kind in (RowKind.SHORTCUT, RowKind.CREATE)
 
 
 @dataclass
@@ -44,13 +48,11 @@ class OverlayModel:
     selected: int = 0
     app_context: str | None = None
     status: str = ""
-    pending_chord: Chord | None = None
-    draft_command: str = ""
-    # None means "adding a brand-new binding"; otherwise the existing
-    # shortcut being rebound/retargeted/deleted. Kept distinct from
-    # `current()` because `n` (add) operates independently of whatever
-    # row happens to be selected.
-    editing_target: Shortcut | None = None
+    # Installed apps, scanned once and handed to each draft so the form's
+    # type-ahead doesn't re-glob every applications directory per keystroke.
+    apps: list[DesktopApp] = field(default_factory=list)
+    draft: BindingDraft | None = None
+    delete_target: Shortcut | None = None
     _rows: list[Row] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -92,6 +94,11 @@ class OverlayModel:
             rows.append(Row(RowKind.SECTION, category.value))
             group.sort(key=lambda s: (s.chord.display()))
             rows.extend(Row(RowKind.SHORTCUT, shortcut=s) for s in group)
+
+        # A search that found nothing is the moment you most want to create
+        # the thing you were looking for, so offer it right there.
+        if self.query.strip() and not visible:
+            rows.append(Row(RowKind.CREATE, title=self.query.strip()))
 
         self._rows = rows
         self._clamp_selection()
@@ -142,9 +149,23 @@ class OverlayModel:
         position = max(0, min(len(indexes) - 1, position + delta))
         self.selected = indexes[position]
 
+    def move_page(self, delta: int, page: int = 8) -> None:
+        self.move(delta * max(1, page))
+
+    def move_to_edge(self, direction: int) -> None:
+        indexes = self.selectable_indexes
+        if not indexes:
+            return
+        self.selected = indexes[-1] if direction > 0 else indexes[0]
+
     def current(self) -> Shortcut | None:
         if 0 <= self.selected < len(self._rows):
             return self._rows[self.selected].shortcut
+        return None
+
+    def current_row(self) -> Row | None:
+        if 0 <= self.selected < len(self._rows):
+            return self._rows[self.selected]
         return None
 
     def set_query(self, query: str) -> None:
@@ -164,7 +185,7 @@ class OverlayModel:
         except Exception:  # noqa: BLE001 - never break the overlay over stats
             pass
 
-    # --- edit state machine -------------------------------------------
+    # --- opening and closing the form ---------------------------------
 
     _READONLY_STATUS = (
         "That's a reference shortcut from an app cheat sheet — "
@@ -176,7 +197,7 @@ class OverlayModel:
 
         App cheat-sheet entries carry no source span -- editor.py's write
         functions already refuse them, but failing that late (after a whole
-        capture-and-commit flow) would be a bad user experience. Catching it
+        form has been filled in) would be a bad user experience. Catching it
         here means the UI never even opens an edit flow for one.
         """
         if target.source is None:
@@ -184,37 +205,29 @@ class OverlayModel:
             return True
         return False
 
-    def begin_capture(self) -> bool:
-        """Rebind the currently selected shortcut to a new chord."""
-        target = self.current()
-        if target is None:
-            return False
-        if self._refuse_if_readonly(target):
-            return False
-        self.editing_target = target
-        self.mode = Mode.CAPTURE_CHORD
-        self.pending_chord = None
-        self.status = "Press the new key combination…  Esc to cancel"
-        return True
-
-    def begin_add(self) -> bool:
+    def begin_add(self, command: str = "") -> bool:
         """Start a brand-new binding, independent of the current selection."""
-        self.editing_target = None
-        self.mode = Mode.CAPTURE_CHORD
-        self.pending_chord = None
-        self.status = "Press the key combination for a new binding…  Esc to cancel"
+        self.draft = BindingDraft.for_new(self.shortcuts, self.apps, command=command)
+        self.mode = Mode.FORM
+        self.status = ""
         return True
 
-    def begin_command_edit(self) -> bool:
+    def begin_edit(self, unwrap=None) -> bool:
+        """Edit the selected binding.
+
+        ``unwrap`` turns a backend action back into a bare command (so the
+        form shows ``firefox``, not ``spawn-sh "firefox"``); None means the
+        action is shown verbatim and saved back the same way.
+        """
         target = self.current()
         if target is None:
             return False
         if self._refuse_if_readonly(target):
             return False
-        self.editing_target = target
-        self.mode = Mode.EDIT_COMMAND
-        self.draft_command = target.action
-        self.status = "Type a command or pick an app…  Esc to cancel"
+        command = unwrap(target.action) if unwrap is not None else None
+        self.draft = BindingDraft.for_edit(self.shortcuts, target, command, self.apps)
+        self.mode = Mode.FORM
+        self.status = ""
         return True
 
     def begin_delete(self) -> bool:
@@ -223,46 +236,34 @@ class OverlayModel:
             return False
         if self._refuse_if_readonly(target):
             return False
-        self.editing_target = target
+        self.delete_target = target
         self.mode = Mode.CONFIRM_DELETE
-        self.status = "Delete this binding?  y to confirm, Esc to cancel"
+        self.status = f"Delete {target.chord.display()}?  y to confirm, Esc to cancel"
         return True
 
-    def capture(self, chord: Chord) -> str | None:
-        """Record a captured chord and report a conflict message, if any."""
-        self.pending_chord = chord
-        claim = self.conflict_for(chord)
-        self.status = (
-            f"{chord.display()}  —  {claim}" if claim else f"{chord.display()}  —  free"
-        )
-        return claim
+    def activate(self, unwrap=None) -> bool:
+        """What Enter does on the current row: create, or edit."""
+        row = self.current_row()
+        if row is None:
+            return False
+        if row.kind is RowKind.CREATE:
+            return self.begin_add(command=row.title)
+        return self.begin_edit(unwrap=unwrap)
 
     def cancel(self) -> None:
         self.mode = Mode.BROWSE
-        self.pending_chord = None
-        self.draft_command = ""
-        self.editing_target = None
+        self.draft = None
+        self.delete_target = None
         self.status = ""
-
-    def conflict_for(self, chord: Chord) -> str | None:
-        """Whether `chord` is free, excluding the binding being edited.
-
-        When adding a new binding (`editing_target is None`) nothing is
-        excluded, since every existing shortcut is a real claimant.
-        """
-        others = [s for s in self.shortcuts if s is not self.editing_target]
-        return conflicts.describe_claimant(chord, others)
 
     # --- presentation -------------------------------------------------
 
     def hint(self) -> str:
-        if self.mode is Mode.CAPTURE_CHORD:
-            return "esc cancel · enter save"
-        if self.mode is Mode.EDIT_COMMAND:
-            return "esc cancel · enter save · tab complete app"
+        if self.mode is Mode.FORM and self.draft is not None:
+            return self.draft.hint()
         if self.mode is Mode.CONFIRM_DELETE:
             return "y delete · esc cancel"
-        return "↑↓ move · enter rebind · ^enter command · n new · d delete · esc close"
+        return "↑↓ move · enter edit · ^n new · ^d delete · esc close"
 
     def header(self) -> str:
         if self.app_context:
@@ -270,4 +271,4 @@ class OverlayModel:
         return "Keybindings"
 
     def count(self) -> int:
-        return sum(1 for row in self._rows if row.selectable)
+        return sum(1 for row in self._rows if row.kind is RowKind.SHORTCUT)

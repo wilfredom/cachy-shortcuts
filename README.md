@@ -33,14 +33,11 @@ none of them work across all three compositors. This does both:
   which is arguably the better signal: a binding you keep searching for is
   one you haven't internalized yet.
 
-**[Interactive design preview](docs/overlay-preview.html)** — the overlay
-can't be screenshotted or run in the environment that built it (no Wayland
-session, no GTK4), so this reproduces its exact palette and interaction logic
-in a self-contained HTML file. Open it in a browser, or download it and open
-it locally: search filtering, arrow-key navigation, and the whole edit flow
-(`Enter` to rebind, `Ctrl+Enter` to edit the command, `n`/`d` to add/delete,
-live conflict feedback) all work for real. See the file itself for exactly
-what's real versus simulated.
+> **Note:** [`docs/overlay-preview.html`](docs/overlay-preview.html) is an
+> interactive preview of the *first* overlay design. It has not been updated
+> for the current one — the panel styling, the selection highlight and the
+> add/edit form all differ. Treat it as a historical sketch, not as
+> documentation.
 
 ## Install
 
@@ -62,7 +59,9 @@ cd cachy-shortcuts
 ```
 
 This pip-installs the package for your user, installs a `.desktop` launcher
-entry, and registers the overlay's own hotkey. It's safe to re-run.
+entry, registers the overlay's own hotkey, and adds a tiling exception so the
+overlay floats over the whole screen instead of being laid out as a window.
+It's safe to re-run.
 
 The overlay itself needs GTK4, PyGObject, and
 [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) — on Arch:
@@ -75,6 +74,32 @@ The CLI (`list`, `doctor`, `add`, `rm`, ...) works without any of that; only
 the visual overlay needs them. `cachy-shortcuts doctor` reports exactly
 what's missing.
 
+### Why it isn't tiled
+
+The overlay is a **layer-shell surface** on the overlay layer, anchored to
+every edge — no compositor lays those out, so it floats above everything
+including fullscreen windows, and reserves no screen space.
+
+That only works if `libgtk4-layer-shell.so` is loaded *before* libwayland-client,
+which is why `cachy_shortcuts/ui/_layershell.py` exists and is imported before
+anything touches GTK. Get that order wrong and layer-shell silently does
+nothing: no error, just an ordinary window that your tiler puts in a column.
+`cachy-shortcuts doctor` reports whether it actually loaded.
+
+As a safety net for when gtk4-layer-shell isn't installed, `install-rules`
+writes a float rule per compositor, matched on the overlay's app id
+(`dev.cachyos.Shortcuts`):
+
+| Compositor | Rule |
+|---|---|
+| Niri | a `window-rule` with `open-floating true` in `config.kdl` |
+| MangoWM | `windowrule=isfloating:1,...` in `config.conf` |
+| COSMIC | a tiling exception in `com.system76.CosmicSettings.WindowRules/v1/tiling_exception_custom` |
+
+Each is written through the same snapshot → atomic write → validate → rollback
+path as every other edit, carries a `cachy-shortcuts` marker comment so
+re-running is a no-op, and is undoable with `cachy-shortcuts undo`.
+
 ## Usage
 
 Press the hotkey (`Super+Slash` by default, unless something else already
@@ -84,16 +109,38 @@ open the overlay. From there:
 | Key | Action |
 |---|---|
 | Type anything | Search chord, description, or command |
-| `↑` / `↓` | Move selection |
-| `Enter` | Rebind the selected shortcut — press the new chord, `Enter` to save |
-| `Ctrl+Enter` | Edit the command instead of the chord (`Tab` cycles installed-app suggestions) |
-| `n` | Add a new binding (only while search is empty; `Ctrl+N` always works) |
-| `d` | Delete the selected binding, `y` to confirm (only while search is empty; `Ctrl+D` always works) |
-| `Esc` | Cancel the current action, or close the overlay |
+| `↑` / `↓` | Move selection (`PgUp`/`PgDn`, `Home`/`End` too) |
+| `Enter` | Edit the selected binding |
+| `Ctrl+N` | Add a new binding |
+| `Ctrl+D` | Delete the selected binding, `y` to confirm |
+| `Esc` | Clear the search, or close the overlay if it's already empty |
 
-Conflicts are shown live, in place — composing a chord another binding
-already owns turns the row amber and names the owner, before you save
-anything.
+Search a word that matches nothing and the list offers `＋ Bind "<word>"…` —
+the fastest way in when what you wanted isn't bound yet.
+
+### Adding or editing a binding
+
+`Ctrl+N` opens a form with three fields you `Tab` between. It asks for the
+**command first**, because you know what you want to bind before you know
+which keys are still free:
+
+| Key | Action |
+|---|---|
+| Type in **Application or command** | Live list of installed apps; `↑`/`↓` picks |
+| `Tab` | Take the highlighted app and move on — this also fills in a free chord |
+| In **Shortcut** | Press the combination you want. The field listens while focused and stops the moment a key lands, so `Tab`/`Enter`/`Esc` keep working afterwards |
+| `Backspace` | Clear the chord and listen again |
+| `Enter` | Save |
+| `Esc` | Cancel (or, while the chord field is listening, just stop listening) |
+
+Pick an app and you're offered an unclaimed chord derived from its name —
+`Super+O` for Obsidian, or the next free variant if that's taken. Accept it
+and you're done in three keystrokes.
+
+**A chord that's already bound will not silently become a duplicate.** The
+form names whoever owns it and refuses to save; `Ctrl+Enter` takes the chord
+for real, unbinding the old one rather than appending a second claim the
+compositor would ignore.
 
 ### CLI
 
@@ -114,6 +161,7 @@ cachy-shortcuts apps obsidian           # search installed .desktop apps
 cachy-shortcuts cheatsheet firefox      # preview an app's bundled cheat sheet
 cachy-shortcuts cheatsheet --list       # every bundled/user cheat sheet pack
 cachy-shortcuts forget --all            # erase lookup history
+cachy-shortcuts install-rules           # add the tiling exception (--dry-run to preview)
 ```
 
 Add `--backend {niri,cosmic,mango}` to target a specific compositor, or
@@ -164,11 +212,27 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The core (models, parsers, the write path, conflict detection, the CLI, and
-the overlay's state machine) is fully covered by tests that run without a
-Wayland session. The GTK4 rendering layer (`cachy_shortcuts/ui/overlay.py`)
-is deliberately thin over that tested core, since it can only be verified by
-running it on a real compositor.
+The core (models, parsers, the write path, conflict detection, the CLI, the
+tiling-exception rules, the palette contrast floor, and both of the overlay's
+state machines) is fully covered by tests that run without a Wayland session.
+
+The UI splits along that line deliberately, so the part that *can't* be tested
+stays small:
+
+| Module | GTK? | What it holds |
+|---|---|---|
+| `ui/viewmodel.py` | no | Browsing: filtering, grouping, selection |
+| `ui/form_model.py` | no | The add/edit form: focus order, chord capture, app suggestions, conflicts, validation |
+| `ui/_layershell.py` | yes | Loads gtk4-layer-shell before GTK, and only that |
+| `ui/chord_field.py` | yes | Turns GDK key events into chords |
+| `ui/binding_form.py` | yes | Paints a `BindingDraft` |
+| `ui/overlay.py` | yes | Window, layer-shell setup, list rendering |
+
+Contrast is not left to taste: `theming.ensure_contrast` measures every
+foreground against the panel background and raises anything below its WCAG
+floor (7:1 for body text, 4.5:1 for secondary, 3:1 for muted), so adopting a
+Noctalia or DMS palette can shift the hues without making the overlay
+unreadable.
 
 ## License
 

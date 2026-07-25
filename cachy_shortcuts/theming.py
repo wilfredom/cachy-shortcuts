@@ -186,6 +186,105 @@ def _from_material(colours: dict, source: str) -> Palette | None:
     return replace(palette, source=source)
 
 
+# --- contrast -------------------------------------------------------------
+#
+# Adopting a shell's colours wholesale is how the overlay ended up unreadable:
+# Noctalia and DMS pick their tokens for *their* widgets, and a Material
+# `outline` or `on_surface_variant` chosen to sit on a card can land far too
+# close to our panel background. So every foreground is checked against the
+# background it will actually be drawn on and nudged until it clears a floor.
+# The hues survive; only the lightness moves.
+
+# WCAG AA is 4.5:1 for body text and 3:1 for large/secondary text. Body copy
+# gets AAA (7:1) because this is a dense monospace list read at a glance.
+_MINIMUM_CONTRAST = {
+    "text": 7.0,
+    "text_dim": 4.5,
+    "accent": 4.5,
+    "warning": 4.5,
+    "muted": 3.0,
+}
+
+
+def _to_rgb(colour: str) -> tuple[float, float, float] | None:
+    text = colour.strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if len(text) == 8:  # #rrggbbaa -- alpha plays no part in contrast here
+        text = text[:6]
+    if len(text) != 6:
+        return None
+    try:
+        value = int(text, 16)
+    except ValueError:
+        return None
+    return (
+        ((value >> 16) & 0xFF) / 255,
+        ((value >> 8) & 0xFF) / 255,
+        (value & 0xFF) / 255,
+    )
+
+
+def _to_hex(rgb: tuple[float, float, float]) -> str:
+    return "#" + "".join(f"{round(max(0.0, min(1.0, c)) * 255):02x}" for c in rgb)
+
+
+def _luminance(rgb: tuple[float, float, float]) -> float:
+    """WCAG relative luminance."""
+
+    def channel(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(foreground: str, background: str) -> float:
+    """WCAG contrast ratio between two hex colours, 1.0 if either is unusable."""
+    fg, bg = _to_rgb(foreground), _to_rgb(background)
+    if fg is None or bg is None:
+        return 1.0
+    light, dark = sorted((_luminance(fg), _luminance(bg)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _blend(rgb: tuple[float, float, float], towards: float, amount: float):
+    return tuple(c + (towards - c) * amount for c in rgb)
+
+
+def fit_contrast(foreground: str, background: str, minimum: float) -> str:
+    """Push ``foreground`` away from ``background`` until it clears ``minimum``.
+
+    Moves towards white on a dark background and towards black on a light one,
+    in small steps, keeping as much of the original colour as still clears the
+    floor. Returns the input unchanged when it already passes or can't be
+    parsed.
+    """
+    fg, bg = _to_rgb(foreground), _to_rgb(background)
+    if fg is None or bg is None:
+        return foreground
+    if contrast_ratio(foreground, background) >= minimum:
+        return foreground
+
+    target = 1.0 if _luminance(bg) < 0.5 else 0.0
+    for step in range(1, 21):
+        candidate = _to_hex(_blend(fg, target, step / 20))
+        if contrast_ratio(candidate, background) >= minimum:
+            return candidate
+    # Pure white or black is the most contrast there is; if that still misses
+    # the floor the background is mid-grey and nothing will pass.
+    return _to_hex((target, target, target))
+
+
+def ensure_contrast(palette: Palette) -> Palette:
+    """Raise every foreground in ``palette`` to a legible floor."""
+    fixed = {
+        name: fit_contrast(getattr(palette, name), palette.background, minimum)
+        for name, minimum in _MINIMUM_CONTRAST.items()
+    }
+    return replace(palette, **fixed)
+
+
 # --- entry point ----------------------------------------------------------
 
 
@@ -207,5 +306,5 @@ def current_palette(backend_name: str | None = None) -> Palette:
         except Exception:  # noqa: BLE001 - theming must never break the overlay
             palette = None
         if palette is not None:
-            return palette
+            return ensure_contrast(palette)
     return REFERENCE

@@ -144,15 +144,15 @@ class TestReadOnlyGuard:
             source=SourceRef("niri", Path("/tmp/x"), 0, 1, 1),
         )
 
-    def test_begin_capture_refuses_a_cheatsheet_entry(self):
+    def test_begin_edit_refuses_a_cheatsheet_entry(self):
         model = OverlayModel(shortcuts=[self._app_shortcut()])
-        assert model.begin_capture() is False
+        assert model.begin_edit() is False
         assert model.mode is Mode.BROWSE
         assert "app's own settings" in model.status
 
-    def test_begin_command_edit_refuses_a_cheatsheet_entry(self):
+    def test_activate_refuses_a_cheatsheet_entry(self):
         model = OverlayModel(shortcuts=[self._app_shortcut()])
-        assert model.begin_command_edit() is False
+        assert model.activate() is False
         assert model.mode is Mode.BROWSE
 
     def test_begin_delete_refuses_a_cheatsheet_entry(self):
@@ -162,8 +162,8 @@ class TestReadOnlyGuard:
 
     def test_editable_shortcuts_are_unaffected(self):
         model = OverlayModel(shortcuts=[self._editable_shortcut()])
-        assert model.begin_capture() is True
-        assert model.mode is Mode.CAPTURE_CHORD
+        assert model.begin_edit() is True
+        assert model.mode is Mode.FORM
 
     def test_begin_add_is_never_blocked_by_the_guard(self):
         # Adding a new binding has no target yet, so the read-only check

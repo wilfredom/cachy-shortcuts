@@ -1,6 +1,6 @@
 """Compositor backends."""
 
-from .base import Backend, ParsedFile
+from .base import Backend, FloatRule, ParsedFile
 from .cosmic import CosmicBackend
 from .mango import MangoBackend
 from .niri import NiriBackend
@@ -11,6 +11,7 @@ __all__ = [
     "ALL_BACKENDS",
     "Backend",
     "CosmicBackend",
+    "FloatRule",
     "MangoBackend",
     "NiriBackend",
     "ParsedFile",

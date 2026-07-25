@@ -14,8 +14,9 @@ import os
 import re
 from pathlib import Path
 
+from .. import APP_IDS, RULE_MARKER
 from ..model import Chord, Shortcut, SourceRef, infer_category
-from .base import Backend
+from .base import Backend, FloatRule
 
 _BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrp]*))\s*=\s*(?P<rest>.*)$")
 _SOURCE_RE = re.compile(r"^source\s*=\s*(?P<path>.+?)\s*$")
@@ -182,6 +183,22 @@ class MangoBackend(Backend):
             return (last_end, "\n", "")
         prefix = "" if text.endswith("\n") or not text else "\n"
         return (len(text), prefix, "\n")
+
+    def float_rule(self) -> FloatRule | None:
+        """``windowrule`` lines forcing the overlay to float.
+
+        Mango takes one rule per line and matches a single appid each, so both
+        spellings need their own line rather than one rule with alternatives.
+        """
+        rules = "\n".join(
+            f"windowrule=isfloating:1,noblur:1,appid:{app_id}" for app_id in APP_IDS
+        )
+        body = f"# {RULE_MARKER}: keep the keybinding overlay out of the layout\n{rules}"
+        paths = self.config_paths()
+        target = paths[0] if paths else (self._root / "config.conf")
+        return FloatRule(
+            backend=self.name, path=target, body=body, marker=f"# {RULE_MARKER}:"
+        )
 
     def reload(self) -> None:
         self._run(["mmsg", "-d", "reload_config"])

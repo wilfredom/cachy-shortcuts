@@ -29,6 +29,55 @@ class ParsedFile:
     shortcuts: list[Shortcut]
 
 
+@dataclass(frozen=True)
+class FloatRule:
+    """A rule that exempts the overlay from a compositor's tiling layout.
+
+    The overlay is normally a layer-shell surface, which no tiler lays out at
+    all. This is the safety net for when gtk4-layer-shell is missing or the
+    compositor doesn't implement wlr-layer-shell: without it the overlay opens
+    as an ordinary toplevel and gets tiled into a column like any other window.
+
+    ``marker`` is a substring whose presence in the file means the rule is
+    already installed, which is what makes installation idempotent.
+    """
+
+    backend: str
+    path: Path
+    body: str
+    marker: str
+    # "append" adds the rule at the end of the file; "ron-list" splices it into
+    # an existing ``[ ... ]`` RON list, creating the list if the file is absent.
+    mode: str = "append"
+
+    def apply(self, text: str) -> str:
+        """Return ``text`` with this rule added. Idempotent."""
+        if self.marker in text and self.body.strip() in text:
+            return text
+        if self.mode == "ron-list":
+            return self._apply_ron_list(text)
+        if self.mode != "append":
+            raise ValueError(f"unknown float-rule mode: {self.mode!r}")
+        if not text.strip():
+            return self.body.rstrip() + "\n"
+        return text.rstrip("\n") + "\n\n" + self.body.rstrip() + "\n"
+
+    def _apply_ron_list(self, text: str) -> str:
+        close = text.rfind("]")
+        if close == -1:
+            # No list yet (missing or empty file): write a whole one.
+            return "[\n" + self.body.rstrip() + "\n]\n"
+        head = text[:close].rstrip()
+        # An empty list is "[" with nothing after it; anything else already has
+        # entries, which RON requires us to keep comma-separated.
+        if not head.endswith("[") and not head.endswith(","):
+            head += ","
+        return head + "\n" + self.body.rstrip() + "\n" + text[close:]
+
+    def installed_in(self, text: str) -> bool:
+        return self.marker in text and self.body.strip() in text
+
+
 class Backend(ABC):
     """One compositor's config format."""
 
@@ -102,6 +151,15 @@ class Backend(ABC):
         inserted at ``offset`` wrapped in prefix/suffix so indentation and
         blank lines come out right.
         """
+
+    # --- tiling exception ---------------------------------------------------
+
+    def float_rule(self) -> FloatRule | None:
+        """The rule that keeps the overlay out of this compositor's layout.
+
+        None means this compositor has no such concept (or needs none).
+        """
+        return None
 
     # --- runtime -----------------------------------------------------------
 

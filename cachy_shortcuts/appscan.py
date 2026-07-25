@@ -116,11 +116,17 @@ def scan() -> list[DesktopApp]:
     return sorted(seen.values(), key=lambda a: a.name.lower())
 
 
-def search(query: str, limit: int = 20) -> list[DesktopApp]:
-    apps = [a for a in scan() if a.matches(query)]
+def rank(apps: list[DesktopApp], query: str, limit: int = 20) -> list[DesktopApp]:
+    """Filter and order ``apps`` by how well they match ``query``.
+
+    Split out from ``search`` so a type-ahead can scan the disk once and then
+    re-rank a cached list on every keystroke, instead of re-globbing every
+    applications directory per character typed.
+    """
+    matched = [a for a in apps if a.matches(query)]
     q = query.strip().lower()
 
-    def rank(app: DesktopApp) -> tuple[int, str]:
+    def key(app: DesktopApp) -> tuple[int, str]:
         name = app.name.lower()
         if name == q:
             return (0, name)
@@ -128,8 +134,12 @@ def search(query: str, limit: int = 20) -> list[DesktopApp]:
             return (1, name)
         return (2, name)
 
-    apps.sort(key=rank)
-    return apps[:limit]
+    matched.sort(key=key)
+    return matched[:limit]
+
+
+def search(query: str, limit: int = 20) -> list[DesktopApp]:
+    return rank(scan(), query, limit)
 
 
 def command_for(name: str) -> str | None:
