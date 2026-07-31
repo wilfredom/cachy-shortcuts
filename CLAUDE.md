@@ -65,13 +65,33 @@ fully testable), `render(chord, action, description, extras)`,
 
 Offsets are **character** offsets into the decoded UTF-8 text, not bytes.
 
+`backends/_kdl.py` is a shared *scanner*, not a parser — used by `niri.py`
+(KDL) and `cosmic.py` (RON). It understands only the syntax that can hide a
+brace (comments, strings, raw strings), because what's needed is the exact span
+a node occupies. Don't replace it with a real KDL/RON library: a proper parser
+gives you a tree and loses the spans the surgical-write path depends on.
+
+Hyprland has a version trap: its window-rule grammar changed twice,
+incompatibly. `HyprlandBackend.version()` reads `hyprctl version`, falling back
+to `Hyprland --version`, and picks `match:class` (0.53+), `windowrule =
+float, class:` (0.45–0.52) or `windowrulev2` below that. Unknown version ⇒
+newest grammar.
+
 Round-tripping matters: `extras` carries what a backend must not lose across an
 edit (niri's `allow-when-locked`, mango's `bind` flags, Hyprland's `bindd` form
 and unexpanded `$mainMod` variables), and `render` reuses the config's original
 spelling when the chord is unchanged, so editing one field doesn't reformat the
-others. Adding a backend means adding it to `ALL_BACKENDS` in
-`backends/__init__.py`, teaching `detect.py` its process/session markers, and
-adding a fixture tree under `tests/fixtures/`.
+others.
+
+COSMIC reads as a *merge*, not a file: the user's `custom` layers over the
+system `defaults`, with `Disable` entries removing a default outright. Reading
+has to reproduce that or the overlay shows bindings the compositor isn't
+honouring.
+
+Adding a backend: implement the contract, add it to `ALL_BACKENDS`
+(`backends/__init__.py`), teach `detect.py` its process/session/desktop
+markers, drop a config tree under `tests/fixtures/<name>/`, and add a fixture
+for it in `tests/conftest.py`.
 
 ### Every write is snapshot → atomic write → re-parse → rollback
 
@@ -121,6 +141,30 @@ chord field listens for as long as it has focus (including when it already
 holds a suggested chord), and an **unmodified** `Tab`/`Enter`/`Esc`/`Backspace`
 is navigation while anything with a modifier held is a chord to record.
 `Ctrl+Enter` is reserved for taking a claimed chord.
+
+### Tests read real configs, not string literals
+
+`tests/conftest.py` exposes one fixture per backend (`niri`, `hyprland`,
+`hyprland_vanilla`, `cosmic`, `mango`, plus `all_backends`), each pointed at a
+config tree in `tests/fixtures/`. `hyprland_vanilla` is the same compositor
+with no shell — no `$variables`, no Noctalia binds — and exists so
+shell-specific handling can't silently become mandatory. `by_chord(shortcuts)`
+keys a parse result by `chord.canonical` for assertions.
+
+Write-path tests follow two conventions from `tests/test_editor.py`: a
+`<backend>_rw` fixture `copytree`s the fixture into `tmp_path` so the shared
+config is never mutated, and an autouse `isolated_backups` fixture repoints
+`XDG_DATA_HOME` — without it, snapshots land in the real
+`~/.local/share/cachy-shortcuts/`. Any new test that exercises `editor` or
+`backup` needs both.
+
+### CLI
+
+`cli.py` pairs a `cmd_<name>(args) -> int` function with an `add_parser` block
+in `build_parser`. Every command resolves its targets through
+`_resolve_backends`, which honours `--backend`, then `--all`, then the active
+compositor, then everything installed — so a subcommand should never call
+`detect` directly. `_die(msg, code)` is the error exit.
 
 ### Supporting modules
 
