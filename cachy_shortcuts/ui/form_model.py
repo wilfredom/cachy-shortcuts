@@ -148,12 +148,15 @@ class BindingDraft:
     def _move_focus(self, delta: int) -> None:
         position = FIELD_ORDER.index(self.focus)
         self.focus = FIELD_ORDER[(position + delta) % len(FIELD_ORDER)]
-        # Arriving at an empty chord field means you are there to fill it in.
-        self.chord_armed = self.focus is Field.CHORD and self.chord is None
+        self.chord_armed = self.focus is Field.CHORD
 
     def focus_field(self, target: Field) -> None:
         self.focus = target
-        self.chord_armed = target is Field.CHORD and self.chord is None
+        # Arriving at the chord field means you are there to set the chord --
+        # including when one is already in it. A suggested chord is a default
+        # you type over, so the field has to be listening or there is no way
+        # to say no to it. Bare Tab/Enter/Esc still leave (see BindingForm).
+        self.chord_armed = target is Field.CHORD
 
     def set_command(self, text: str) -> None:
         if text == self.command:
@@ -233,6 +236,10 @@ class BindingDraft:
 
     def chord_text(self) -> str:
         if self.chord is not None:
+            if self.chord_armed:
+                # Say so when the chord on show is only a default: a suggested
+                # chord that looks final is one nobody realises they can change.
+                return f"{self.chord.display()}   ·   press to change"
             return self.chord.display()
         return "press a key combination…" if self.chord_armed else "not set"
 
@@ -307,7 +314,7 @@ class BindingDraft:
         if self.focus is Field.COMMAND and self.suggestions():
             return "↑↓ pick app · tab accept · enter save · esc cancel"
         if self.focus is Field.CHORD and self.chord_armed:
-            return "press a combination · backspace clear · esc stop listening"
+            return "press a combination · backspace clear · tab next field"
         if self.claimant() is not None and not self.replace_confirmed:
             return "^enter take the chord · tab next field · esc cancel"
         return "tab next field · enter save · esc cancel"

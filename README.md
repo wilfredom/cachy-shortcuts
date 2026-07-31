@@ -137,14 +137,22 @@ which keys are still free:
 |---|---|
 | Type in **Application or command** | Live list of installed apps; `↑`/`↓` picks |
 | `Tab` | Take the highlighted app and move on — this also fills in a free chord |
-| In **Shortcut** | Press the combination you want. The field listens while focused and stops the moment a key lands, so `Tab`/`Enter`/`Esc` keep working afterwards |
+| In **Shortcut** | Press the combination you want. The field listens the whole time it has focus — including when it already shows a suggested chord, which you simply type over |
 | `Backspace` | Clear the chord and listen again |
 | `Enter` | Save |
 | `Esc` | Cancel (or, while the chord field is listening, just stop listening) |
 
 Pick an app and you're offered an unclaimed chord derived from its name —
 `Super+O` for Obsidian, or the next free variant if that's taken. Accept it
-and you're done in three keystrokes.
+and you're done in three keystrokes; press something else and that's the
+binding instead.
+
+Inside the Shortcut field, one rule decides what a key press means: an
+**unmodified** `Tab`, `Enter` or `Esc` moves on, saves or stops listening,
+while anything with a modifier held down is a chord to record. So `Super+Esc`
+and `Shift+F5` bind fine; a bare `Tab`, `Enter`, `Esc` or `Backspace` can't be
+bound from the form, and neither can `Ctrl+Enter`, which is reserved for taking
+a claimed chord. Use `cachy-shortcuts add <chord>` for those.
 
 **A chord that's already bound will not silently become a duplicate.** The
 form names whoever owns it and refuses to save; `Ctrl+Enter` takes the chord
