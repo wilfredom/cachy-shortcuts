@@ -12,7 +12,7 @@ here entirely.
 
 from __future__ import annotations
 
-from ._layershell import Gtk, Pango
+from ._layershell import Gdk, Gtk, Pango
 from .chord_field import MOD_KEYVAL_NAMES, MOD_MASK, ChordField, chord_from_event
 from .form_model import Field
 
@@ -173,7 +173,10 @@ class BindingForm(Gtk.Box):
             return False
 
         # While the chord field is listening it owns almost everything, so
-        # that Super+Q binds Super+Q instead of being read as a command.
+        # that Super+Q binds Super+Q instead of being read as a command. It
+        # listens for as long as it has focus -- including when it already
+        # holds a suggested chord -- and _handle_armed keeps the bare
+        # Tab/Enter/Esc exits working.
         if draft.focus is Field.CHORD and draft.chord_armed:
             return self._handle_armed(keyval, state, name)
 
@@ -210,7 +213,7 @@ class BindingForm(Gtk.Box):
         if name in ("Return", "KP_Enter"):
             self._handle_return(ctrl)
             return True
-        if draft.focus is Field.CHORD and not ctrl:
+        if draft.focus is Field.CHORD:
             # An unarmed chord field: start listening rather than swallowing
             # the key, so pressing something here does the obvious thing. A
             # modifier on its own isn't that -- holding Super on the way to
@@ -223,9 +226,13 @@ class BindingForm(Gtk.Box):
 
     def _handle_armed(self, keyval: int, state, name: str) -> bool:
         draft = self.draft
-        # "Bare" Escape stops listening, but Super+Escape is a chord someone
-        # might genuinely want, so only the unmodified press is a way out.
-        bare = not (state & MOD_MASK)
+        # The field listens whenever it has focus, so the ways out of it have
+        # to survive being armed. One rule decides: an *unmodified* Tab, Enter
+        # or Esc is navigation, and anything with a modifier held is a chord --
+        # Super+Escape is something someone might genuinely want to bind.
+        masked = state & MOD_MASK
+        bare = not masked
+        ctrl = bool(masked & Gdk.ModifierType.CONTROL_MASK)
         if name == "Escape" and bare:
             draft.disarm_chord()
             self.refresh()
@@ -233,6 +240,20 @@ class BindingForm(Gtk.Box):
         if name == "BackSpace" and bare:
             draft.clear_chord()
             self.refresh()
+            return True
+        if name == "Tab" and bare:
+            draft.focus_next()
+            self.refresh()
+            return True
+        # Shift+Tab arrives as ISO_Left_Tab, so "bare" for it means Shift only.
+        if name == "ISO_Left_Tab" and masked == Gdk.ModifierType.SHIFT_MASK:
+            draft.focus_previous()
+            self.refresh()
+            return True
+        if name in ("Return", "KP_Enter") and (bare or ctrl):
+            # Ctrl+Enter keeps meaning "take that chord", so it is the one
+            # modified combination the form reserves rather than captures.
+            self._handle_return(ctrl)
             return True
         chord = chord_from_event(keyval, state)
         if chord is None:

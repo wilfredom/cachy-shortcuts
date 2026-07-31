@@ -89,11 +89,12 @@ class TestFieldNavigation:
         assert draft.focus is Field.CHORD
         assert draft.chord_armed is True
 
-    def test_arriving_at_a_filled_chord_field_does_not(self, existing):
+    def test_arriving_at_a_filled_chord_field_starts_listening_too(self, existing):
+        """A chord already in the field is a default, not a decision."""
         draft = BindingDraft.for_new(existing)
         draft.chord = Chord.parse("Super+Z")
         draft.focus_next()
-        assert draft.chord_armed is False
+        assert draft.chord_armed is True
 
 
 class TestChordCapture:
@@ -176,6 +177,26 @@ class TestAppSuggestions:
         assert draft.command == "obsidian"
         assert draft.description == "Obsidian"
         assert draft.chord == Chord.parse("Super+O")
+
+    def test_a_suggested_chord_can_be_typed_over(self, existing, apps):
+        """The reported bug: the form assigned a chord and then wouldn't budge.
+
+        Tab from the command field fills the chord in, so the field it lands on
+        has to be listening -- otherwise the suggestion is a decision made for
+        you rather than a default offered to you.
+        """
+        draft = BindingDraft.for_new(existing, apps)
+        draft.set_command("obs")
+        draft.accept_suggestion()
+        draft.focus_field(Field.CHORD)
+        assert draft.chord == Chord.parse("Super+O")
+        assert draft.chord_armed is True
+        assert "press to change" in draft.chord_text()
+
+        draft.capture(Chord.parse("Ctrl+Alt+T"))
+        assert draft.chord == Chord.parse("Ctrl+Alt+T")
+        assert draft.chord_armed is False
+        assert draft.chord_text() == draft.chord.display()
 
     def test_the_suggested_chord_is_never_one_already_taken(self, existing, apps):
         draft = BindingDraft.for_new(existing, apps)
