@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## This repo is one of three
+
+`cachy-stuff` is the hub — the plan of record, and `docs/repos.md` there is the map of which
+repo writes which path. `cachy-backup` (`cb`) captures and restores what this tool writes.
+
+Two consequences for work here:
+
+- **This tool is the writer for `bindings.toml`.** `cachy-stuff` owns the desired state;
+  a planned `apply --from <file>` subcommand reaches it, reusing `normalize.Chord`,
+  `conflicts.first_free`, each backend's `render`, and `editor._commit`. `cachy-stuff`
+  deliberately has no generators of its own — do not add format knowledge there.
+- **The overlay is the system's only cheat sheet.** `cachy-stuff` does not build a second one.
+
 ## Commands
 
 ```sh

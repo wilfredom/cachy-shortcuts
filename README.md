@@ -41,6 +41,13 @@ none of them work across every compositor. This does both:
 > add/edit form all differ. Treat it as a historical sketch, not as
 > documentation.
 
+## One of three repos
+
+This tool is the *writer* in a three-repo system: [`cachy-stuff`](https://github.com/wilfredom/cachy-stuff)
+holds the plan and the key bindings you want, this tool puts them into each compositor's own
+config, and `cachy-backup` (`cb`) captures and restores the result. `cachy-stuff/docs/repos.md`
+is the map.
+
 ## Install
 
 ### Arch / CachyOS (recommended)
