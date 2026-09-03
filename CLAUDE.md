@@ -10,7 +10,7 @@ repo writes which path. `cachy-backup` (`cb`) captures and restores what this to
 Two consequences for work here:
 
 - **This tool is the writer for `bindings.toml`.** `cachy-stuff` owns the desired state;
-  a planned `apply --from <file>` subcommand reaches it, reusing `normalize.Chord`,
+  a planned `apply --from <file>` subcommand reaches it, reusing `model.Chord`,
   `conflicts.first_free`, each backend's `render`, and `editor._commit`. `cachy-stuff`
   deliberately has no generators of its own — do not add format knowledge there.
 - **The overlay is the system's only cheat sheet.** `cachy-stuff` does not build a second one.
