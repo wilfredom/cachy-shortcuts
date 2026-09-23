@@ -194,9 +194,8 @@ The effort level or mode sets the ceiling, not the target.
   result changes for a user, and what does it cost? If the payoff is a better proxy — a
   refactor, a docstring, test naming — spend little.
 - **Sample before scaling.** Make a change work on one backend fixture, run its tests, then
-  carry it to the other three. On 2026-09-23 a session sent 62 records through reviewer and
-  skeptic agents and got 7 fixes and 1 reject (~13%); most "weak" rows were a grading artifact,
-  not a data problem. A 5-record sample would have shown that before the spend.
+  carry it to the other three. (A 62-record agent review elsewhere yielded ~13% fixes; 5 records
+  would have shown it.)
 - **Match rigor to stakes.** An adversarial second pass is worth it where an error mutates a
   config file or hides a conflict: `editor.py`, `backup.py`, `render` round-trips, the
   `normalize.py` tables. It is not worth it for overlay styling or messages.
