@@ -183,3 +183,29 @@ compositor, then everything installed — so a subcommand should never call
 - `install.py` / `floatrule.py` — the tool's own hotkey and the per-compositor
   tiling exception, both written through the same snapshot/rollback path and
   both idempotent via a marker comment.
+
+## Working economics (value per cost)
+
+The practical output of this repo is bindings read and written correctly on four compositors,
+with `pytest` green. Judge every step by how much of that it produces per token and per minute.
+The effort level or mode sets the ceiling, not the target.
+
+- **Price the step before starting it.** Ask: if this succeeds, which parse, write or conflict
+  result changes for a user, and what does it cost? If the payoff is a better proxy — a
+  refactor, a docstring, test naming — spend little.
+- **Sample before scaling.** Make a change work on one backend fixture, run its tests, then
+  carry it to the other three. On 2026-09-23 a session sent 62 records through reviewer and
+  skeptic agents and got 7 fixes and 1 reject (~13%); most "weak" rows were a grading artifact,
+  not a data problem. A 5-record sample would have shown that before the spend.
+- **Match rigor to stakes.** An adversarial second pass is worth it where an error mutates a
+  config file or hides a conflict: `editor.py`, `backup.py`, `render` round-trips, the
+  `normalize.py` tables. It is not worth it for overlay styling or messages.
+- **Visible result first, polish after.** Order: model/backend change → `pytest` → commit + push
+  → then the GTK wiring (unverifiable here) and polish. A session that stops early must still
+  leave `pytest` green on the branch.
+- **Land value as it arrives.** Commit each backend or fix once its tests pass.
+- **Build a tool only when reuse is certain.** A new helper must replace recurring work; for a
+  handful of cases, check them directly in a test.
+- **Report output per cost at each milestone.** State what changed for Will (bindings fixed,
+  backends covered, tests added) and the spend so far (agents launched, tokens, wall time —
+  whatever the session reports). If the ratio is poor, stop and ask before continuing.
