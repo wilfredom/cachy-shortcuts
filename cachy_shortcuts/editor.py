@@ -310,6 +310,7 @@ def _replace(
     # override into the user's custom file instead of editing in place.
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
+        _require_live_default(backend, shortcut)
         text = read_for_edit(backend, path)
         old_chord = shortcut.chord
         released = new_chord != old_chord
@@ -350,6 +351,23 @@ def _replace(
     )
 
 
+def _require_live_default(backend: Backend, shortcut: Shortcut) -> None:
+    """Refuse to override a read-only default that is no longer what's live.
+
+    An override is appended to the user's file, and the last entry for a
+    chord wins -- so a Disable or override written for a stale default would
+    silently beat whatever took the chord since it was read (COSMIC Settings
+    while the overlay is open, a second CLI run). The in-place path has its
+    span check for this; this is the same check for the append path.
+    """
+    live = next((s for s in backend.read() if s.chord == shortcut.chord), None)
+    if live is None or not live.extras.get("readonly") or live.raw != shortcut.raw:
+        raise EditError(
+            f"{shortcut.chord.display()} changed since it was read; refusing "
+            "to override it -- reopen the list and try again"
+        )
+
+
 def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
     if shortcut.source is None:
         raise EditError("binding has no recorded source span")
@@ -357,6 +375,7 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
     # Removing a COSMIC default means recording an explicit Disable in custom.
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
+        _require_live_default(backend, shortcut)
         text = read_for_edit(backend, path)
         new_text = _insert(backend, text, backend.render(shortcut.chord, "Disable"))
         return _commit(

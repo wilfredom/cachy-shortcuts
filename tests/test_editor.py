@@ -559,6 +559,26 @@ class TestCosmicOverrides:
         assert cosmic_rw._custom.read_text().count("Disable") == disables
         assert by_chord(cosmic_rw.read())["super+return"].action == 'Spawn("foot")'
 
+    def test_a_stale_default_is_not_overridden(self, cosmic_rw):
+        """A custom binding put on the default's chord since it was read
+        would lose to the Disable appended after it."""
+        stale = by_chord(cosmic_rw.read())["super+q"]
+        assert stale.extras["readonly"]
+        custom = cosmic_rw.write_target()
+        custom.write_text(
+            custom.read_text().replace(
+                "}", '    (modifiers: [Super], key: "q"): Spawn("mine"),\n}'
+            )
+        )
+        before = custom.read_text()
+        with pytest.raises(editor.EditError, match="changed since it was read"):
+            editor.rebind(cosmic_rw, stale, Chord.parse("Super+Z"))
+        with pytest.raises(editor.EditError, match="changed since it was read"):
+            editor.delete(cosmic_rw, stale)
+        assert custom.read_text() == before
+        assert by_chord(cosmic_rw.read())["super+q"].action == 'Spawn("mine")'
+        assert backup.list_snapshots() == []
+
     def test_adding_after_an_entry_without_a_trailing_comma(self, cosmic_rw):
         """RON's trailing comma is optional, but the one between entries is
         not. The lenient parser accepts the broken map, so validation alone
