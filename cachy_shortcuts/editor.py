@@ -48,20 +48,34 @@ def _target_file(backend: Backend, shortcut: Shortcut | None) -> Path:
     if isinstance(backend, CosmicBackend):
         return backend.write_target()
     if shortcut is not None and shortcut.source is not None:
-        return shortcut.source.path
+        return backend.write_path(shortcut.source.path)
     paths = backend.config_paths()
     if not paths:
         raise EditError(f"no writable config found for {backend.display_name}")
-    return paths[0]
+    return backend.write_path(paths[0])
 
 
-def _read(path: Path) -> str:
+def read_for_edit(backend: Backend, path: Path) -> str:
+    """The text an edit to ``path`` starts from.
+
+    A file the edit is about to create starts as whatever the backend seeds
+    it with (mango: a copy of the system config it replaces).
+    """
     try:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return ""
-    except OSError as exc:
+        return backend.seed_text(path)
+    except (OSError, UnicodeDecodeError) as exc:
         raise EditError(f"cannot read {path}: {exc}") from exc
+
+
+def _write(snapshot: backup.Snapshot, path: Path, text: str) -> None:
+    """Atomic write; a refusal (read-only dir, no permission) is an EditError."""
+    try:
+        backup.write_atomic(path, text)
+    except OSError as exc:
+        backup.discard(snapshot)  # nothing was written
+        raise EditError(f"cannot write {path}: {exc}") from exc
 
 
 def _insert(backend: Backend, text: str, rendered: str) -> str:
@@ -79,7 +93,7 @@ def _commit(
     chord: Chord | None,
 ) -> EditResult:
     snapshot = backup.create([path], reason=operation)
-    backup.write_atomic(path, new_text)
+    _write(snapshot, path, new_text)
     try:
         reparsed = backend.parse(path.read_text(encoding="utf-8"), path)
     except Exception as exc:  # noqa: BLE001 - any parse failure means roll back
@@ -107,7 +121,7 @@ def write_file(
     caller supplies the check instead.
     """
     snapshot = backup.create([path], reason=operation)
-    backup.write_atomic(path, new_text)
+    _write(snapshot, path, new_text)
     try:
         written = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -138,7 +152,7 @@ def add(
     description: str = "",
 ) -> EditResult:
     path = _target_file(backend, None)
-    text = _read(path)
+    text = read_for_edit(backend, path)
     new_text = _insert(backend, text, backend.render(chord, action, description))
     return _commit(
         backend,
@@ -285,7 +299,7 @@ def _replace(
     # override into the user's custom file instead of editing in place.
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
-        text = _read(path)
+        text = read_for_edit(backend, path)
         old_chord = shortcut.chord
         released = new_chord != old_chord
         new_text = text
@@ -308,8 +322,8 @@ def _replace(
             backend, path, new_text, f"{operation} (override)", took, new_chord
         )
 
-    path = shortcut.source.path
-    text = _read(path)
+    path = _target_file(backend, shortcut)
+    text = read_for_edit(backend, path)
     if text[shortcut.source.start : shortcut.source.end] != shortcut.raw:
         raise EditError(
             f"{path} changed since it was read; refusing to edit the wrong bytes"
@@ -332,7 +346,7 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
     # Removing a COSMIC default means recording an explicit Disable in custom.
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
-        text = _read(path)
+        text = read_for_edit(backend, path)
         new_text = _insert(backend, text, backend.render(shortcut.chord, "Disable"))
         return _commit(
             backend,
@@ -343,8 +357,8 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
             shortcut.chord,
         )
 
-    path = shortcut.source.path
-    text = _read(path)
+    path = _target_file(backend, shortcut)
+    text = read_for_edit(backend, path)
     if text[shortcut.source.start : shortcut.source.end] != shortcut.raw:
         raise EditError(
             f"{path} changed since it was read; refusing to edit the wrong bytes"

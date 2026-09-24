@@ -72,7 +72,7 @@ def install(backend: Backend, dry_run: bool = False) -> RuleStatus:
         return state
 
     rule = state.rule
-    text = _read(rule.path)
+    text = editor.read_for_edit(backend, rule.path)
     new_text = rule.apply(text)
     if new_text == text:
         return RuleStatus(backend, rule, True)

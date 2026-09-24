@@ -355,6 +355,74 @@ class TestSurgicalWrites:
         assert "hotkey-overlay-title=null" in niri_rw.config_paths()[0].read_text()
 
 
+class TestMangoSystemConfig:
+    """With no ~/.config/mango/config.conf, mango runs /etc/mango/config.conf.
+
+    That file belongs to the package: an edit must go to a user copy of it,
+    since a user config.conf holding only the new bind would replace the
+    system one and drop every default bind.
+    """
+
+    @pytest.fixture
+    def fresh(self, tmp_path):
+        system = tmp_path / "etc" / "mango" / "config.conf"
+        system.parent.mkdir(parents=True)
+        system.write_text((FIXTURES / "mango" / "config.conf").read_text())
+        root = tmp_path / "home" / ".config" / "mango"
+        return MangoBackend(config_root=root, system_config=system), system
+
+    def test_reads_what_mango_runs(self, fresh):
+        backend, system = fresh
+        assert backend.config_paths()[0] == system
+        assert "super+b" in by_chord(backend.read())
+
+    def test_add_writes_a_user_copy_and_leaves_etc_alone(self, fresh):
+        backend, system = fresh
+        before = system.read_text()
+        result = editor.add(backend, Chord.parse("Super+Y"), "spawn firefox")
+        assert result.path == backend.write_target()
+        after = result.path.read_text()
+        assert after.replace("\nbind=SUPER,y,spawn,firefox", "", 1) == before
+        assert system.read_text() == before
+        found = by_chord(backend.read())
+        assert "super+y" in found and "super+b" in found
+
+    def test_deleting_a_system_bind_writes_the_copy_without_it(self, fresh):
+        backend, system = fresh
+        before = system.read_text()
+        result = editor.delete(backend, by_chord(backend.read())["super+b"])
+        assert result.path == backend.write_target()
+        assert system.read_text() == before
+        found = by_chord(backend.read())
+        assert "super+b" not in found and "super+return" in found
+
+    def test_the_float_rule_targets_the_user_copy(self, fresh):
+        from cachy_shortcuts import floatrule
+
+        backend, system = fresh
+        state = floatrule.install(backend)
+        assert state.rule.path == backend.write_target()
+        assert "super+b" in by_chord(backend.read())
+
+    def test_undo_removes_the_copy_again(self, fresh):
+        backend, system = fresh
+        editor.add(backend, Chord.parse("Super+Y"), "spawn firefox")
+        editor.undo_last()
+        assert not backend.write_target().exists()
+
+    def test_a_refused_write_is_an_edit_error(self, fresh, monkeypatch):
+        """Not a PermissionError traceback out of the CLI."""
+        backend, _ = fresh
+
+        def refuse(path, text):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(backup, "write_atomic", refuse)
+        with pytest.raises(editor.EditError, match="cannot write"):
+            editor.add(backend, Chord.parse("Super+Y"), "spawn firefox")
+        assert backup.list_snapshots() == []
+
+
 class TestCosmicOverrides:
     def test_editing_a_default_writes_an_override_to_custom(self, cosmic_rw):
         target = by_chord(cosmic_rw.read())["super+q"]

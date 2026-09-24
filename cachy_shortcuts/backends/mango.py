@@ -60,23 +60,52 @@ _MANGO_KEY_SPELLING = {
 }
 
 
+# What mango runs when the user has no config.conf of their own (meson.build
+# installs it). It reads one or the other, never both, and nothing here may
+# write to it: it belongs to the package.
+SYSTEM_CONFIG = Path("/etc/mango/config.conf")
+
+
 class MangoBackend(Backend):
     name = "mango"
     display_name = "MangoWM"
 
-    def __init__(self, config_root: Path | None = None) -> None:
+    def __init__(
+        self, config_root: Path | None = None, system_config: Path | None = None
+    ) -> None:
         self._root = config_root or (
             Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mango"
         )
+        self._system = system_config or SYSTEM_CONFIG
+
+    def write_target(self) -> Path:
+        """The user's own config.conf, whether or not it exists yet."""
+        return self._root / "config.conf"
 
     def config_paths(self) -> list[Path]:
-        main = self._root / "config.conf"
-        if not main.exists():
-            fallback = Path("/etc/mango/config.conf")
-            main = fallback if fallback.exists() else main
+        main = self.write_target()
+        if not main.exists() and self._system.exists():
+            main = self._system
         out: list[Path] = []
         self._collect(main, out, set())
         return out
+
+    def write_path(self, path: Path) -> Path:
+        # An edit to a bind read from the system file lands in a user copy.
+        return self.write_target() if path == self._system else path
+
+    def seed_text(self, path: Path) -> str:
+        """The system config, copied verbatim, when the user file is created.
+
+        A user config.conf replaces the system one outright, so creating it
+        with only the new bind would silently drop every default bind.
+        """
+        if path != self.write_target():
+            return ""
+        try:
+            return self._system.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
 
     def _collect(self, path: Path, out: list[Path], visited: set[Path]) -> None:
         try:
@@ -246,10 +275,11 @@ class MangoBackend(Backend):
             f"windowrule=isfloating:1,noblur:1,appid:{app_id}" for app_id in APP_IDS
         )
         body = f"# {RULE_MARKER}: keep the keybinding overlay out of the layout\n{rules}"
-        paths = self.config_paths()
-        target = paths[0] if paths else (self._root / "config.conf")
         return FloatRule(
-            backend=self.name, path=target, body=body, marker=f"# {RULE_MARKER}:"
+            backend=self.name,
+            path=self.write_target(),
+            body=body,
+            marker=f"# {RULE_MARKER}:",
         )
 
     def reload(self) -> None:

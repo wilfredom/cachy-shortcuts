@@ -156,6 +156,18 @@ class Backend(ABC):
         the rest of the binding.
         """
 
+    def write_path(self, path: Path) -> Path:
+        """The file an edit to a binding read from ``path`` is written to.
+
+        The same file, except where the compositor falls back to a system
+        config the user doesn't own; that must never be written in place.
+        """
+        return path
+
+    def seed_text(self, path: Path) -> str:
+        """What ``path`` starts as when an edit is about to create it."""
+        return ""
+
     @abstractmethod
     def insertion_point(self, text: str) -> tuple[int, str, str]:
         """Where a new binding goes in ``text``.
