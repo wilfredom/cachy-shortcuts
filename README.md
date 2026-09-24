@@ -171,8 +171,10 @@ cachy-shortcuts list --json             # machine-readable
 cachy-shortcuts doctor                  # detection, configs, conflicts, deps
 cachy-shortcuts conflicts               # just the conflicts
 cachy-shortcuts add "Super+N" --app Obsidian
+cachy-shortcuts add "Super+B" firefox --force  # unbind whatever holds it first
 cachy-shortcuts rm "Super+N"
 cachy-shortcuts undo                    # revert the most recent change
+cachy-shortcuts undo --force            # ...even if the file changed since (keeps a copy)
 cachy-shortcuts restore --list          # every snapshot, for anything older
 cachy-shortcuts apps obsidian           # search installed .desktop apps
 cachy-shortcuts cheatsheet firefox      # preview an app's bundled cheat sheet
