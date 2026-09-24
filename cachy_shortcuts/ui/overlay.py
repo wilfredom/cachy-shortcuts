@@ -130,6 +130,12 @@ class OverlayWindow(Gtk.ApplicationWindow):
             self._set_keyboard_exclusive(False)
 
     def close_overlay(self) -> None:
+        # Hiding keeps the window attached, and GTK keeps an application
+        # running while it has any window, so the process stays resident after
+        # the first use. cachy-stuff docs/performance.md budgets 0 added
+        # processes at idle. Open question (needs a real session to measure):
+        # quit here if a cold start fits the 80 ms Super+K budget, or name the
+        # resident overlay as an exception in performance.md.
         self.set_visible(False)
 
     # --- widget tree -------------------------------------------------------
