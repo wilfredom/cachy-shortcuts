@@ -347,6 +347,30 @@ class TestCosmicOverrides:
         assert cosmic_rw._custom.read_text().count("Disable") == disables
         assert by_chord(cosmic_rw.read())["super+return"].action == 'Spawn("foot")'
 
+    def test_adding_after_an_entry_without_a_trailing_comma(self, cosmic_rw):
+        """RON's trailing comma is optional, but the one between entries is
+        not. The lenient parser accepts the broken map, so validation alone
+        would not catch it."""
+        custom = cosmic_rw._custom
+        custom.write_text(custom.read_text().replace("Disable,\n}", "Disable\n}"))
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        text = custom.read_text()
+        assert '(modifiers: [Super], key: "w"): Disable,\n' in text
+        assert "super+y" in by_chord(cosmic_rw.read())
+
+    def test_the_comma_goes_before_a_trailing_comment(self, cosmic_rw):
+        custom = cosmic_rw._custom
+        custom.write_text(
+            custom.read_text().replace("Disable,\n}", "Disable // gone\n}")
+        )
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        assert 'key: "w"): Disable,' in custom.read_text()
+
+    def test_repeated_adds_do_not_stack_blank_lines(self, cosmic_rw):
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        editor.add(cosmic_rw, Chord.parse("Super+U"), "kitty")
+        assert cosmic_rw._custom.read_text().endswith('Spawn("kitty"),\n}\n')
+
     def test_deleting_a_default_records_a_disable(self, cosmic_rw):
         target = by_chord(cosmic_rw.read())["super+escape"]
         editor.delete(cosmic_rw, target)

@@ -173,8 +173,33 @@ class CosmicBackend(Backend):
         close = text.rfind("}")
         if close == -1:
             return (len(text), "{\n    ", "\n}\n")
-        head = text[:close].rstrip()
-        return (len(head), "\n    ", "\n")
+        head_end = len(text[:close].rstrip())
+        # RON separates map entries with commas and only the trailing one is
+        # optional, so the last entry may not have one. Find the last real
+        # token before the closing brace -- not whitespace, not a comment.
+        sc = Scanner(text)
+        last = -1
+        i = text.find("{") + 1
+        while i < close:
+            i = sc.skip_trivia(i)
+            if i >= close:
+                break
+            if sc.at_string(i):
+                i = sc.skip_string(i)
+                last = i - 1
+            else:
+                last = i
+                i += 1
+        if last == -1 or text[last] == ",":
+            offset, prefix = head_end, "\n    "
+        else:
+            # The comma goes straight after the entry, ahead of any comment
+            # trailing it.
+            offset, prefix = last + 1, ",\n    "
+        # The line break already before the brace ends the new line; adding
+        # another would stack one more blank line with every add.
+        suffix = "" if offset == head_end and "\n" in text[offset:close] else "\n"
+        return (offset, prefix, suffix)
 
     def write_target(self) -> Path:
         """COSMIC edits always go to the user's custom file, never defaults."""
