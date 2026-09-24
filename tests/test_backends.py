@@ -156,6 +156,35 @@ class TestMangoReader:
         backend = MangoBackend(config_root=tmp_path, system_config=tmp_path / "none")
         assert "super+x" in by_chord(backend.read())
 
+    def test_a_keymode_carries_into_a_sourced_file_and_out_again(self, tmp_path):
+        """The keymode is one parser state: parse_config_file() never resets
+        it, and `source` is read inline."""
+        from cachy_shortcuts.backends import MangoBackend
+
+        (tmp_path / "config.conf").write_text(
+            "bind=SUPER,F,setkeymode,resize\n"
+            "keymode=resize\n"
+            "source=./dms/binds.conf\n"
+            "bind=NONE,Left,resizewin,-10,0\n"
+            "source=./leaves-open.conf\n"
+            "bind=SUPER,x,spawn,foot\n"
+        )
+        (tmp_path / "dms").mkdir()
+        (tmp_path / "dms" / "binds.conf").write_text("bind=SUPER,Space,spawn,dms ipc call spotlight toggle\n")
+        (tmp_path / "leaves-open.conf").write_text("keymode=default\nbind=SUPER,y,spawn,kitty\n")
+        backend = MangoBackend(config_root=tmp_path, system_config=tmp_path / "none")
+        shortcuts = backend.read()
+        scope = {s.chord.canonical: s.extras["submap"] for s in shortcuts}
+        assert scope == {
+            "super+f": "",
+            "super+space": "resize",
+            "left": "resize",
+            "super+y": "",
+            "super+x": "",
+        }
+        # In the order mango loads them, not file by file.
+        assert [s.chord.canonical for s in shortcuts] == list(scope)
+
     def test_source_optional_and_the_c_flag_are_read(self, mango):
         """Both were skipped, so a taken chord could be offered as free."""
         assert "extra.conf" in [p.name for p in mango.config_paths()]
@@ -309,6 +338,25 @@ class TestHyprlandReader:
         text = "submap = resize, reset\nbind = , right, resizeactive, 10 0\nsubmap = reset\n"
         (bind,) = hyprland.parse(text, Path("hyprland.conf"))
         assert bind.extras["submap"] == "resize"
+
+    def test_a_submap_carries_into_a_sourced_file_and_out_again(self, tmp_path):
+        """m_currentSubmap survives handleSource: a file sourced inside a
+        submap block binds into that submap."""
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        (tmp_path / "hyprland.conf").write_text(
+            "bind = SUPER, R, submap, resize\n"
+            "submap = resize\n"
+            "source = resize.conf\n"
+            "submap = reset\n"
+            "source = opens.conf\n"
+            "bind = SUPER, X, exec, foot\n"
+        )
+        (tmp_path / "resize.conf").write_text("bind = , escape, submap, reset\n")
+        (tmp_path / "opens.conf").write_text("submap = launch\nbind = , f, exec, firefox\n")
+        backend = HyprlandBackend(config_root=tmp_path)
+        scope = {s.chord.canonical: s.extras["submap"] for s in backend.read()}
+        assert scope == {"super+r": "", "escape": "resize", "f": "launch", "super+x": "launch"}
 
     def test_a_commented_source_line_is_followed(self, tmp_path):
         from cachy_shortcuts.backends import HyprlandBackend

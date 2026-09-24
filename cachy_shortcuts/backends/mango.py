@@ -49,6 +49,15 @@ def _code(line: str) -> str:
     return line
 
 
+def _sourced(stripped: str, base: Path) -> Path | None:
+    """The file a ``source`` / ``source-optional`` line names, if it is one."""
+    m = _SOURCE_RE.match(stripped)
+    if not m:
+        return None
+    candidate = Path(os.path.expanduser(m.group("path").strip()))
+    return candidate if candidate.is_absolute() else base / candidate
+
+
 def _scope_of(mode: str) -> str:
     """A keymode as a conflict scope: ``default`` and ``common`` are global."""
     return "" if mode in ("", "default", "common") else mode
@@ -143,19 +152,57 @@ class MangoBackend(Backend):
             stripped = _code(line).strip()
             if stripped.startswith("#"):
                 continue
-            m = _SOURCE_RE.match(stripped)
-            if m:
-                target = os.path.expanduser(m.group("path").strip())
-                candidate = Path(target)
-                if not candidate.is_absolute():
-                    candidate = path.parent / candidate
-                self._collect(candidate, out, visited)
+            target = _sourced(stripped, path.parent)
+            if target is not None:
+                self._collect(target, out, visited)
 
-    def parse(self, text: str, path: Path) -> list[Shortcut]:
+    def parse(self, text: str, path: Path, mode: str = "default") -> list[Shortcut]:
+        """One file's binds; ``mode`` is the keymode in effect where it starts.
+
+        mango starts its config in the default mode (parse_config.c), and a
+        sourced file starts in whatever mode its ``source`` line was in.
+        """
         out: list[Shortcut] = []
+        self._walk(text, path, out, mode, None)
+        return out
+
+    def read(self) -> list[Shortcut]:
+        """Every bind, in the order mango loads them.
+
+        ``source`` is read inline and the keymode is one parser state, so a
+        sourced file's binds sit where its ``source`` line is, in the keymode
+        in effect there, and a keymode it leaves open carries on after it.
+        """
+        paths = self.config_paths()
+        if not paths:
+            return []
+        out: list[Shortcut] = []
+        visited: set[Path] = set()
+
+        def visit(path: Path, mode: str) -> str:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                return mode
+            if resolved in visited or not path.exists():
+                return mode
+            visited.add(resolved)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return mode
+            return self._walk(text, path, out, mode, visit)
+
+        visit(paths[0], "default")
+        return out
+
+    def _walk(self, text: str, path: Path, out: list[Shortcut], mode: str, visit) -> str:
+        """Append ``text``'s binds to ``out``; returns the keymode it ends in.
+
+        With ``visit``, a ``source`` line hands its file and the current mode
+        to it, and carries on in the mode that file leaves.
+        """
         offset = 0
-        # mango starts every config in the default mode (parse_config.c).
-        mode = "default"
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
             stripped = _code(line).strip()
             if not stripped or stripped.startswith("#"):
@@ -166,6 +213,12 @@ class MangoBackend(Backend):
                 mode = km.group("name")
                 offset += len(line)
                 continue
+            if visit is not None:
+                target = _sourced(stripped, path.parent)
+                if target is not None:
+                    mode = visit(target, mode)
+                    offset += len(line)
+                    continue
             m = _BIND_RE.match(stripped)
             if not m:
                 offset += len(line)
@@ -214,7 +267,7 @@ class MangoBackend(Backend):
                 )
             )
             offset += len(line)
-        return out
+        return mode
 
     def render(
         self,

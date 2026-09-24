@@ -305,18 +305,45 @@ class HyprlandBackend(Backend):
 
     # --- parsing -----------------------------------------------------------
 
-    def parse(self, text: str, path: Path) -> list[Shortcut]:
-        variables = self.variables()
-        # A file handed to us directly -- one not reachable from the main
-        # config, or text that hasn't been written yet -- still defines its own.
+    def parse(self, text: str, path: Path, submap: str = "") -> list[Shortcut]:
+        """One file's binds; ``submap`` is the one in effect where it starts.
+
+        A sourced file starts in whatever submap its ``source`` line was in:
+        m_currentSubmap is one parser state, and handleSource keeps it.
+        """
+        out: list[Shortcut] = []
+        self._walk(text, path, out, self._file_variables(text), submap, None)
+        return out
+
+    def _file_variables(self, text: str, variables: dict | None = None) -> dict:
+        """The variables in effect in ``text``: the config's, then its own.
+
+        A file handed to us directly -- one not reachable from the main
+        config, or text that hasn't been written yet -- still defines its own.
+        """
+        variables = dict(self.variables() if variables is None else variables)
         local = _collect_variables(text)
         if local:
             merged = {**variables, **local}
             variables.update({n: _expand(v, merged) for n, v in local.items()})
+        return variables
 
-        out: list[Shortcut] = []
+    def _walk(
+        self,
+        text: str,
+        path: Path,
+        out: list[Shortcut],
+        variables: dict,
+        submap: str,
+        visit,
+    ) -> str:
+        """Append ``text``'s binds to ``out``; returns the submap it ends in.
+
+        An ``unbind`` disables what is already in ``out``. With ``visit``, a
+        ``source`` line hands each file and the current submap to it, and
+        carries on in the submap that file leaves.
+        """
         offset = 0
-        submap = ""
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
             stripped = _code(line).strip()
             if not stripped or stripped.startswith("#"):
@@ -335,127 +362,121 @@ class HyprlandBackend(Backend):
                 offset += len(line)
                 continue
 
-            m = _BIND_RE.match(stripped)
-            if not m:
-                offset += len(line)
-                continue
-            fields = _split_fields(m.group("rest"), described="d" in m.group("flags"))
-            if fields is None:
-                offset += len(line)
-                continue
-            (
-                mods_raw,
-                key_raw,
-                description_raw,
-                dispatcher_raw,
-                params_raw,
-                seps,
-                had_params,
-            ) = fields
-
-            try:
-                chord = Chord.from_parts(
-                    split_mods(_expand(mods_raw, variables)),
-                    _expand(key_raw, variables),
-                )
-            except (KeyError, ValueError):
+            if visit is not None and _SOURCE_RE.match(stripped):
+                for target in self._sourced_paths(stripped, path.parent):
+                    submap = visit(target, submap)
                 offset += len(line)
                 continue
 
-            action = _join_action(
-                _expand(dispatcher_raw, variables), _expand(params_raw, variables)
-            )
-            description = _expand(description_raw, variables).strip()
-            indent = len(line) - len(line.lstrip())
-            flags = m.group("flags") or ""
-            out.append(
-                Shortcut(
-                    chord=chord,
-                    action=action,
-                    description=description,
-                    category=infer_category(action, description),
-                    source=SourceRef(
-                        backend=self.name,
-                        path=path,
-                        start=offset + indent,
-                        end=offset + indent + len(stripped),
-                        line=lineno,
-                    ),
-                    raw=stripped,
-                    extras={
-                        "flags": flags,
-                        "eq": m.group("eq"),
-                        "seps": seps,
-                        "mods_raw": mods_raw,
-                        "key_raw": key_raw,
-                        "description_raw": description_raw,
-                        "dispatcher_raw": dispatcher_raw,
-                        "params_raw": params_raw,
-                        "had_params": had_params,
-                        # `u` (submap-universal) fires in every submap, the
-                        # global one included (KeybindManager.cpp:652), so it
-                        # competes with global chords wherever it is written.
-                        "submap": "" if "u" in flags else submap,
-                        "block": submap,
-                    },
-                )
-            )
+            shortcut = self._bind(line, stripped, lineno, offset, path, variables, submap)
+            if shortcut is not None:
+                out.append(shortcut)
             offset += len(line)
-        return out
+        return submap
+
+    def _bind(
+        self,
+        line: str,
+        stripped: str,
+        lineno: int,
+        offset: int,
+        path: Path,
+        variables: dict,
+        submap: str,
+    ) -> Shortcut | None:
+        m = _BIND_RE.match(stripped)
+        if not m:
+            return None
+        fields = _split_fields(m.group("rest"), described="d" in m.group("flags"))
+        if fields is None:
+            return None
+        (
+            mods_raw,
+            key_raw,
+            description_raw,
+            dispatcher_raw,
+            params_raw,
+            seps,
+            had_params,
+        ) = fields
+
+        try:
+            chord = Chord.from_parts(
+                split_mods(_expand(mods_raw, variables)),
+                _expand(key_raw, variables),
+            )
+        except (KeyError, ValueError):
+            return None
+
+        action = _join_action(
+            _expand(dispatcher_raw, variables), _expand(params_raw, variables)
+        )
+        description = _expand(description_raw, variables).strip()
+        indent = len(line) - len(line.lstrip())
+        flags = m.group("flags") or ""
+        return Shortcut(
+            chord=chord,
+            action=action,
+            description=description,
+            category=infer_category(action, description),
+            source=SourceRef(
+                backend=self.name,
+                path=path,
+                start=offset + indent,
+                end=offset + indent + len(stripped),
+                line=lineno,
+            ),
+            raw=stripped,
+            extras={
+                "flags": flags,
+                "eq": m.group("eq"),
+                "seps": seps,
+                "mods_raw": mods_raw,
+                "key_raw": key_raw,
+                "description_raw": description_raw,
+                "dispatcher_raw": dispatcher_raw,
+                "params_raw": params_raw,
+                "had_params": had_params,
+                # `u` (submap-universal) fires in every submap, the global
+                # one included (KeybindManager.cpp:652), so it competes with
+                # global chords wherever it is written.
+                "submap": "" if "u" in flags else submap,
+                "block": submap,
+            },
+        )
 
     def read(self) -> list[Shortcut]:
         """Every bind, in the order Hyprland evaluates them.
 
         ``source =`` is inline, so a sourced file's binds sit where its
-        ``source`` line is, and an ``unbind`` reaches every bind before it --
-        including one from the main file or an earlier include, which is the
-        usual "overrides file" layout.
+        ``source`` line is, in the submap in effect there, and an ``unbind``
+        reaches every bind before it -- including one from the main file or
+        an earlier include, which is the usual "overrides file" layout.
         """
         paths = self.config_paths()
         if not paths:
             return []
         out: list[Shortcut] = []
-        self._read_inline(paths[0], out, set(), self.variables())
-        return out
+        visited: set[Path] = set()
+        variables = self.variables()
 
-    def _read_inline(
-        self, path: Path, out: list[Shortcut], visited: set[Path], variables: dict
-    ) -> None:
-        try:
-            resolved = path.resolve()
-        except OSError:
-            return
-        if resolved in visited or not path.exists():
-            return
-        visited.add(resolved)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return
-        events: list[tuple[int, object]] = [
-            (s.source.start, s) for s in self.parse(text, path)
-        ]
-        offset = 0
-        for line in text.splitlines(keepends=True):
-            stripped = _code(line).strip()
-            if stripped and not stripped.startswith("#"):
-                unbind = _UNBIND_RE.match(stripped)
-                if unbind:
-                    events.append((offset, ("unbind", unbind.group("rest"))))
-                elif _SOURCE_RE.match(stripped):
-                    events.append(
-                        (offset, ("source", self._sourced_paths(stripped, path.parent)))
-                    )
-            offset += len(line)
-        events.sort(key=lambda event: event[0])
-        for _, item in events:
-            if isinstance(item, Shortcut):
-                out.append(item)
-            elif item[0] == "unbind":
-                _apply_unbind(out, item[1], variables)
-            else:
-                for target in item[1]:
-                    self._read_inline(target, out, visited, variables)
+        def visit(path: Path, submap: str) -> str:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                return submap
+            if resolved in visited or not path.exists():
+                return submap
+            visited.add(resolved)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return submap
+            file_vars = self._file_variables(text, variables)
+            return self._walk(text, path, out, file_vars, submap, visit)
+
+        visit(paths[0], "")
+        return out
 
     # --- writing -----------------------------------------------------------
 
