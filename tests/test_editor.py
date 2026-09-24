@@ -383,6 +383,30 @@ class TestSafety:
             editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
         assert not custom.exists()
 
+    def test_a_second_undo_walks_further_back(self, mango_rw):
+        path = mango_rw.config_paths()[0]
+        before = path.read_text()
+        editor.add(mango_rw, Chord.parse("Super+Y"), "spawn firefox")
+        editor.add(mango_rw, Chord.parse("Super+U"), "spawn foot")
+        editor.undo_last()
+        editor.undo_last()
+        assert path.read_text() == before
+
+    def test_undo_after_a_failed_write_reverts_the_last_real_edit(
+        self, niri_rw, monkeypatch
+    ):
+        """A rolled-back write changed nothing, so it must not be what undo
+        restores."""
+        path = niri_rw.config_paths()[0]
+        before = path.read_text()
+        editor.add(niri_rw, Chord.parse("Super+Y"), 'spawn "firefox"')
+        target = by_chord(niri_rw.read())["super+b"]
+        monkeypatch.setattr(niri_rw, "render", lambda *a, **k: 'Mod+Z { spawn "wrong"; }')
+        with pytest.raises(editor.EditError, match="did not take effect"):
+            editor.rebind(niri_rw, target, Chord.parse("Super+Shift+B"))
+        editor.undo_last()
+        assert path.read_text() == before
+
     def test_stale_span_is_refused(self, niri_rw):
         target = by_chord(niri_rw.read())["super+b"]
         # Simulate the file changing underneath us between read and write.
@@ -580,6 +604,37 @@ class TestTakeOver:
         ghost.action = "spawn \"something-that-is-not-in-the-file\""
         with pytest.raises(editor.EditError, match="could not be found again"):
             editor.take_over(niri_rw, victim, ghost, Chord.parse("Super+B"), "x")
+
+    def test_a_failed_second_write_is_one_undo_away_from_the_start(self, niri_rw):
+        """The error text tells the user to run undo; that has to restore the
+        victim, not just revert a no-op."""
+        path = niri_rw.config_paths()[0]
+        before = path.read_text()
+        victim = by_chord(niri_rw.read())["super+b"]
+        ghost = by_chord(niri_rw.read())["super+e"]
+        ghost.action = "spawn \"something-that-is-not-in-the-file\""
+        with pytest.raises(editor.EditError):
+            editor.take_over(niri_rw, victim, ghost, Chord.parse("Super+B"), "x")
+        editor.undo_last()
+        assert path.read_text() == before
+
+    def test_one_undo_reverts_both_writes_across_files(self, mango_rw):
+        """Victim in config.conf, target in the sourced bind.conf."""
+        files = {p: p.read_text() for p in mango_rw.config_paths()}
+        shortcuts = by_chord(mango_rw.read())
+        victim, target = shortcuts["super+b"], shortcuts["super+g"]
+        editor.take_over(mango_rw, victim, target, victim.chord, target.action)
+        assert by_chord(mango_rw.read())["super+b"].action == "spawn gimp"
+
+        editor.undo_last()
+        assert {p: p.read_text() for p in files} == files
+
+    def test_a_failed_delete_leaves_no_snapshot_behind(self, niri_rw):
+        victim = by_chord(niri_rw.read())["super+b"]
+        victim.source.path.write_text("// clobbered\n" + victim.source.path.read_text())
+        with pytest.raises(editor.EditError, match="changed since it was read"):
+            editor.take_over(niri_rw, victim, None, victim.chord, 'spawn "x"')
+        assert backup.list_snapshots() == []
 
 
 class TestWriteFile:

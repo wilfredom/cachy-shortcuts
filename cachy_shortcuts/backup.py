@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 MANIFEST = "manifest.json"
+# Dropped into a snapshot once `undo` has restored it, so the next undo walks
+# further back instead of restoring the same snapshot again.
+UNDONE = "undone"
 
 
 def data_dir() -> Path:
@@ -47,8 +50,18 @@ class Snapshot:
 def create(paths: list[Path], reason: str = "edit") -> Snapshot:
     """Copy ``paths`` into a timestamped snapshot directory."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    backup_root().mkdir(parents=True, exist_ok=True)
+    # Never share a directory with another snapshot: discarding one would
+    # take the other with it. A suffix still sorts after the bare stamp.
     target = backup_root() / stamp
-    target.mkdir(parents=True, exist_ok=True)
+    suffix = 0
+    while True:
+        try:
+            target.mkdir()
+            break
+        except FileExistsError:
+            suffix += 1
+            target = backup_root() / f"{stamp}-{suffix}"
     stored: list[Path] = []
     manifest: list[dict] = []
     for index, path in enumerate(paths):
@@ -125,10 +138,27 @@ def restore(snapshot: Snapshot) -> list[Path]:
 
 
 def restore_latest() -> list[Path]:
-    snapshots = list_snapshots()
-    if not snapshots:
-        return []
-    return restore(snapshots[0])
+    """Restore the newest snapshot not already undone, and mark it undone.
+
+    A marker rather than deleting the snapshot keeps `restore --list` history
+    intact; skipping marked ones is what makes a second undo walk back.
+    """
+    for snapshot in list_snapshots():
+        if (snapshot.path / UNDONE).exists():
+            continue
+        restored = restore(snapshot)
+        (snapshot.path / UNDONE).touch()
+        return restored
+    return []
+
+
+def discard(snapshot: Snapshot) -> None:
+    """Drop a snapshot that no longer stands for an edit on disk.
+
+    A write that rolled back changed nothing, and leaving its snapshot as the
+    newest would make `undo` restore that no-op instead of the last real edit.
+    """
+    shutil.rmtree(snapshot.path, ignore_errors=True)
 
 
 def write_atomic(path: Path, text: str) -> None:

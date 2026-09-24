@@ -118,9 +118,11 @@ def _rollback(snapshot: backup.Snapshot) -> None:
     """Undo a write, including one that created the file.
 
     The snapshot records a file that did not exist as absent, and restoring
-    it deletes the file again.
+    it deletes the file again. The snapshot is then dropped: nothing changed,
+    so it must not become what `undo` restores next.
     """
     backup.restore(snapshot)
+    backup.discard(snapshot)
 
 
 def add(
@@ -219,12 +221,31 @@ def take_over(
     different files, and even in the same file removing the victim shifts
     every span after it -- so the second write has to work from a freshly
     parsed target, not the stale record the caller is holding.
+
+    One snapshot covers both writes, so a single `undo` puts the victim back
+    too. If the second write fails, that snapshot is the newest one left.
     """
-    delete(backend, victim)
+    touched = [_target_file(backend, victim)]
+    second = _target_file(backend, target)
+    if second not in touched:
+        touched.append(second)
+    combined = backup.create(touched, reason="take over")
+    try:
+        removed = delete(backend, victim)
+    except Exception:
+        backup.discard(combined)  # nothing changed; undo keeps its last edit
+        raise
+    backup.discard(removed.snapshot)
     if target is None:
-        return add(backend, chord, action, description)
-    fresh = _relocate(backend, target)
-    return update(backend, fresh, chord=chord, action=action, description=description)
+        result = add(backend, chord, action, description)
+    else:
+        fresh = _relocate(backend, target)
+        result = update(
+            backend, fresh, chord=chord, action=action, description=description
+        )
+    backup.discard(result.snapshot)
+    result.snapshot = combined
+    return result
 
 
 def _relocate(backend: Backend, shortcut: Shortcut) -> Shortcut:
