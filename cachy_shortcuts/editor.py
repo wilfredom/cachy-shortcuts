@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -373,30 +374,29 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
         raise EditError(
             f"{path} changed since it was read; refusing to edit the wrong bytes"
         )
-    # Count rather than test for absence: the same chord can legitimately be
-    # bound again in this file (a duplicate, a Hyprland submap, a mango
-    # keymode), and the delete has taken effect once exactly one is gone.
-    def same_chord(parsed: list[Shortcut]) -> int:
-        return sum(1 for s in parsed if s.chord == shortcut.chord)
-
-    before = same_chord(backend.parse(text, path))
-    start, end = shortcut.source.start, shortcut.source.end
-    # Take the whole line when the binding was alone on it, so deleting does
-    # not leave a blank gap behind.
-    line_start = text.rfind("\n", 0, start) + 1
-    if not text[line_start:start].strip():
-        start = line_start
-        newline = text.find("\n", end)
-        end = len(text) if newline == -1 else newline + 1
+    # Every other binding in the file must come through untouched: the same
+    # chord can legitimately be bound again here (a duplicate, a Hyprland
+    # submap, a mango keymode), and a sibling on the same line must not go
+    # with the victim.
+    expected = _bindings(backend.parse(text, path))
+    expected[(shortcut.chord.canonical, shortcut.action, shortcut.raw)] -= 1
+    start, end = backend.deletion_span(
+        text, shortcut.source.start, shortcut.source.end
+    )
     new_text = text[:start] + text[end:]
     return _commit(
         backend,
         path,
         new_text,
         "delete",
-        lambda parsed: same_chord(parsed) == before - 1,
+        lambda parsed: _bindings(parsed) == +expected,
         shortcut.chord,
     )
+
+
+def _bindings(parsed: list[Shortcut]) -> Counter:
+    """A file's bindings as a multiset, for comparing before and after."""
+    return Counter((s.chord.canonical, s.action, s.raw) for s in parsed)
 
 
 def undo_last() -> list[Path]:

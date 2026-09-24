@@ -89,6 +89,7 @@ def niri_chord_spelling(chord: Chord) -> str:
 class NiriBackend(Backend):
     name = "niri"
     display_name = "Niri"
+    line_comment = "//"
 
     def __init__(self, config_root: Path | None = None) -> None:
         self._root = config_root or (
@@ -296,6 +297,16 @@ class NiriBackend(Backend):
         body = action.strip().rstrip(";")
         prefix = "/-" if extras.get("disabled") else ""
         return f"{prefix}{' '.join(parts)} {{ {body}; }}"
+
+    def deletion_span(self, text: str, start: int, end: int) -> tuple[int, int]:
+        # A node's `;` terminator is not part of its span, but it goes with
+        # the node: `Mod+T { ... }; Mod+Y { ... }` must not keep a bare `;`.
+        probe = end
+        while probe < len(text) and text[probe] in " \t":
+            probe += 1
+        if probe < len(text) and text[probe] == ";":
+            end = probe + 1
+        return super().deletion_span(text, start, end)
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:
         block = find_block(text, "binds")

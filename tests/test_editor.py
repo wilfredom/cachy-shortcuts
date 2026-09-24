@@ -316,6 +316,55 @@ class TestSurgicalWrites:
         left = [s for s in mango_rw.read() if s.chord == chord]
         assert [s.extras["command"].strip() for s in left] == ["tagmon"]
 
+    def test_cosmic_delete_keeps_a_second_entry_on_the_same_line(self, cosmic_rw):
+        custom = cosmic_rw.write_target()
+        custom.write_text(
+            "{\n"
+            '    (modifiers: [Super], key: "b"): Spawn("firefox"), '
+            '(modifiers: [Super], key: "e"): Spawn("nautilus"),\n'
+            "}\n"
+        )
+        editor.delete(cosmic_rw, by_chord(cosmic_rw.read())["super+b"])
+        assert custom.read_text() == (
+            '{\n    (modifiers: [Super], key: "e"): Spawn("nautilus"),\n}\n'
+        )
+
+    def test_niri_delete_keeps_a_semicolon_separated_sibling(self, niri_rw):
+        path = niri_rw.config_paths()[0]
+        path.write_text(
+            "binds {\n"
+            '    Mod+T { spawn "alacritty"; }; Mod+Y { spawn "firefox"; }\n'
+            "    Mod+Q { close-window; } // the one to keep\n"
+            "    Mod+W { close-window; } // goes with its bind\n"
+            "}\n"
+        )
+        editor.delete(niri_rw, by_chord(niri_rw.read())["super+t"])
+        editor.delete(niri_rw, by_chord(niri_rw.read())["super+w"])
+        assert path.read_text() == (
+            "binds {\n"
+            '    Mod+Y { spawn "firefox"; }\n'
+            "    Mod+Q { close-window; } // the one to keep\n"
+            "}\n"
+        )
+        editor.delete(niri_rw, by_chord(niri_rw.read())["super+y"])
+        assert set(by_chord(niri_rw.read())) == {"super+q"}
+
+    def test_a_delete_that_takes_anything_else_rolls_back(self, mango_rw, monkeypatch):
+        """The check compares every binding in the file, not just the
+        victim's chord."""
+        path = mango_rw.config_paths()[0]
+        before = path.read_text()
+        target = by_chord(mango_rw.read())["super+b"]
+        # A deletion span that reaches into the next line.
+        monkeypatch.setattr(
+            type(mango_rw),
+            "deletion_span",
+            lambda self, text, start, end: (start, text.find("\n", end + 1) + 1),
+        )
+        with pytest.raises(editor.EditError, match="did not take effect"):
+            editor.delete(mango_rw, target)
+        assert path.read_text() == before
+
     def test_delete_a_global_bind_whose_chord_a_submap_reuses(self, hypr_rw):
         """The fixture binds Super+Q globally and inside `submap = resize`."""
         chord = Chord.parse("Super+Q")

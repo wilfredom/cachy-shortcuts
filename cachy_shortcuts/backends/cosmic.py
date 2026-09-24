@@ -46,6 +46,7 @@ _COSMIC_KEY_SPELLING = {
 class CosmicBackend(Backend):
     name = "cosmic"
     display_name = "COSMIC"
+    line_comment = "//"
 
     _RELATIVE = Path("cosmic/com.system76.CosmicSettings.Shortcuts/v1")
     _RULES_RELATIVE = Path("cosmic/com.system76.CosmicSettings.WindowRules/v1")

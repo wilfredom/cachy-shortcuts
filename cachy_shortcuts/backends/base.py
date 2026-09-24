@@ -96,6 +96,8 @@ class Backend(ABC):
 
     name: str = ""
     display_name: str = ""
+    # What starts a comment that runs to the end of the line.
+    line_comment: str = "#"
 
     # --- discovery ---------------------------------------------------------
 
@@ -180,6 +182,24 @@ class Backend(ABC):
         read; the edit is refused rather than started from nothing.
         """
         return ""
+
+    def deletion_span(self, text: str, start: int, end: int) -> tuple[int, int]:
+        """The characters to cut to remove the binding at ``text[start:end]``.
+
+        The whole line when the binding is alone on it (a trailing comment
+        goes with it), so no blank gap is left behind. When another binding
+        shares the line, only this one and the space that separated it.
+        """
+        line_start = text.rfind("\n", 0, start) + 1
+        newline = text.find("\n", end)
+        line_end = len(text) if newline == -1 else newline
+        before, after = text[line_start:start], text[end:line_end]
+        rest = after.strip()
+        if not before.strip() and (not rest or rest.startswith(self.line_comment)):
+            return line_start, line_end if newline == -1 else newline + 1
+        if rest:
+            return start, end + len(after) - len(after.lstrip(" \t"))
+        return start - (len(before) - len(before.rstrip(" \t"))), end
 
     @abstractmethod
     def insertion_point(self, text: str) -> tuple[int, str, str]:
