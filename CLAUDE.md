@@ -75,7 +75,12 @@ Hyprland has a version trap: its window-rule grammar changed twice,
 incompatibly. `HyprlandBackend.version()` reads `hyprctl version`, falling back
 to `Hyprland --version`, and picks `match:class` (0.53+), `windowrule =
 float, class:` (0.45–0.52) or `windowrulev2` below that. Unknown version ⇒
-newest grammar.
+newest grammar. A second trap: 0.55+ loads `hyprland.lua` in preference to
+`hyprland.conf` (CachyOS's Hyprland + Noctalia profile ships Lua).
+`main_config()` resolves like Hyprland does (`HYPRLAND_CONFIG`, then `.lua`,
+then `.conf`); when it is Lua, `unsupported()` names the file, nothing is
+read, and the editor refuses every write rather than editing an ignored
+`.conf`.
 
 Round-tripping matters: `extras` carries what a backend must not lose across an
 edit (niri's `allow-when-locked`, mango's `bind` flags, Hyprland's `bindd` form
@@ -145,10 +150,11 @@ is navigation while anything with a modifier held is a chord to record.
 ### Tests read real configs, not string literals
 
 `tests/conftest.py` exposes one fixture per backend (`niri`, `hyprland`,
-`hyprland_vanilla`, `cosmic`, `mango`, plus `all_backends`), each pointed at a
-config tree in `tests/fixtures/`. `hyprland_vanilla` is the same compositor
-with no shell — no `$variables`, no Noctalia binds — and exists so
-shell-specific handling can't silently become mandatory. `by_chord(shortcuts)`
+`hyprland_vanilla`, `hyprland_lua`, `cosmic`, `mango`, plus `all_backends`),
+each pointed at a config tree in `tests/fixtures/`. `hyprland_vanilla` is the
+same compositor with no shell — no `$variables`, no Noctalia binds — and exists
+so shell-specific handling can't silently become mandatory. `hyprland_lua` is a
+Lua config with a stale `hyprland.conf` beside it. `by_chord(shortcuts)`
 keys a parse result by `chord.canonical` for assertions.
 
 Write-path tests follow two conventions from `tests/test_editor.py`: a
