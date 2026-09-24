@@ -252,19 +252,17 @@ def take_over(
     parsed target, not the stale record the caller is holding.
 
     One snapshot covers both writes, so a single `undo` puts the victim back
-    too. If the second write fails, that snapshot is the newest one left.
+    too. It is built from the snapshots of the writes themselves, so it holds
+    every file that was written, whichever that turned out to be. If the
+    second write fails, that snapshot is the newest one left.
     """
-    touched = [_target_file(backend, victim)]
-    second = _target_file(backend, target)
-    if second not in touched:
-        touched.append(second)
-    combined = backup.create(touched, reason="take over")
+    combined = backup.create([_target_file(backend, victim)], reason="take over")
     try:
         removed = delete(backend, victim)
     except Exception:
         backup.discard(combined)  # nothing changed; undo keeps its last edit
         raise
-    backup.discard(removed.snapshot)
+    backup.absorb(combined, removed.snapshot)
     if target is None:
         result = add(backend, chord, action, description)
     else:
@@ -272,20 +270,33 @@ def take_over(
         result = update(
             backend, fresh, chord=chord, action=action, description=description
         )
-    backup.discard(result.snapshot)
+    backup.absorb(combined, result.snapshot)
     result.snapshot = combined
     return result
 
 
 def _relocate(backend: Backend, shortcut: Shortcut) -> Shortcut:
-    """Find ``shortcut`` again in a freshly parsed config."""
-    for candidate in backend.read():
-        if (
-            candidate.chord == shortcut.chord
-            and candidate.action == shortcut.action
-            and candidate.source is not None
-        ):
-            return candidate
+    """Find ``shortcut`` again in a freshly parsed config.
+
+    The same text in the same file, not merely the same chord and action:
+    Hyprland's override idiom leaves an unbound copy of a bind in an earlier
+    file, and editing that one would leave the live bind where it was.
+    Among identical lines, one as live as the original wins.
+    """
+    home = backend.write_path(shortcut.source.path) if shortcut.source else None
+    matches = [
+        candidate
+        for candidate in backend.read()
+        if candidate.source is not None
+        and candidate.raw == shortcut.raw
+        and candidate.chord == shortcut.chord
+        and candidate.action == shortcut.action
+        and backend.write_path(candidate.source.path) == home
+    ]
+    disabled = bool(shortcut.extras.get("disabled"))
+    matches.sort(key=lambda c: bool(c.extras.get("disabled")) != disabled)
+    if matches:
+        return matches[0]
     raise EditError(
         f"unbound the old claimant, but {shortcut.chord.display()} could not be "
         "found again afterwards -- check with `cachy-shortcuts list`, or "

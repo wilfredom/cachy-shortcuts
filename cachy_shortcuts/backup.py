@@ -152,6 +152,33 @@ def restore_latest() -> list[Path]:
     return []
 
 
+def absorb(into: Snapshot, other: Snapshot) -> None:
+    """Fold ``other`` into ``into``, then drop ``other``.
+
+    For an operation made of several writes, so that one snapshot -- and one
+    `undo` -- covers every file any of them touched. A file ``into`` already
+    holds keeps ``into``'s copy, the older and so the one to go back to.
+    """
+    manifest = into.path / MANIFEST
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    theirs = json.loads((other.path / MANIFEST).read_text(encoding="utf-8"))
+    files = data.setdefault("files", [])
+    have = {entry["original"] for entry in files}
+    for entry in theirs.get("files", []):
+        if entry["original"] in have:
+            continue
+        entry = dict(entry)
+        if not entry.get("absent"):
+            name = f"{len(files):02d}_{Path(entry['original']).name}"
+            shutil.copy2(other.path / entry["stored"], into.path / name)
+            entry["stored"] = name
+        files.append(entry)
+        have.add(entry["original"])
+        into.files.append(Path(entry["original"]))
+    manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    discard(other)
+
+
 def discard(snapshot: Snapshot) -> None:
     """Drop a snapshot that no longer stands for an edit on disk.
 

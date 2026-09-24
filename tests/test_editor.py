@@ -959,6 +959,40 @@ class TestTakeOver:
         editor.undo_last()
         assert {p: p.read_text() for p in files} == files
 
+    def test_the_live_target_is_moved_not_an_unbound_copy(self, tmp_path):
+        """Hyprland's override idiom leaves an unbound copy of the target in
+        an earlier file. The live one must move, and one undo must revert
+        every file written, whichever file that was."""
+        root = tmp_path / "hypr"
+        root.mkdir()
+        (root / "hyprland.conf").write_text(
+            "bind = SUPER, L, exec, hyprlock\n"
+            "source = binds.conf\n"
+            "source = overrides.conf\n"
+        )
+        (root / "binds.conf").write_text("bind = SUPER, K, exec, foot\n")
+        (root / "overrides.conf").write_text(
+            "unbind = SUPER, L\nbindl = SUPER, L, exec, hyprlock\n"
+        )
+        files = {p: p.read_text() for p in root.iterdir()}
+        hypr = HyprlandBackend(config_root=root)
+        shortcuts = hypr.read()
+        victim = next(s for s in shortcuts if s.chord.canonical == "super+k")
+        target = next(
+            s
+            for s in shortcuts
+            if s.chord.canonical == "super+l" and not s.extras.get("disabled")
+        )
+        editor.take_over(hypr, victim, target, victim.chord, target.action)
+        assert (root / "hyprland.conf").read_text() == files[root / "hyprland.conf"]
+        assert (root / "overrides.conf").read_text() == (
+            "unbind = SUPER, L\nbindl = SUPER, K, exec, hyprlock\n"
+        )
+        (snapshot,) = backup.list_snapshots()
+        assert {p.name for p in snapshot.files} == {"binds.conf", "overrides.conf"}
+        editor.undo_last()
+        assert {p: p.read_text() for p in files} == files
+
     def test_a_failed_delete_leaves_no_snapshot_behind(self, niri_rw):
         victim = by_chord(niri_rw.read())["super+b"]
         victim.source.path.write_text("// clobbered\n" + victim.source.path.read_text())
