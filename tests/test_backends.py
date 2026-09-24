@@ -106,6 +106,13 @@ class TestMangoReader:
         assert "extra.conf" in [p.name for p in backend.config_paths()]
         assert "super+z" in by_chord(backend.read())
 
+    def test_spaced_fields_come_back_clean(self, mango):
+        """`bind = SUPER+ALT, Up, focusmon, up` is one action, not
+        "focusmon  up" with the separator's space still in it."""
+        found = by_chord(mango.read())
+        assert found["super+alt+up"].action == "focusmon up"
+        assert found["super+r"].action == "reload_config"
+
     def test_bind_flags_are_captured(self, mango):
         found = by_chord(mango.read())
         assert found["super+l"].extras["flags"] == "l"

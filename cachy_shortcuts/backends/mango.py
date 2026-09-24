@@ -18,7 +18,7 @@ from .. import APP_IDS, RULE_MARKER
 from ..model import Chord, Shortcut, SourceRef, infer_category
 from .base import Backend, FloatRule
 
-_BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrp]*))\s*=\s*(?P<rest>.*)$")
+_BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrp]*))(?P<eq>\s*=\s*)(?P<rest>.*)$")
 _SOURCE_RE = re.compile(r"^source\s*=\s*(?P<path>.+?)\s*$")
 
 _MANGO_MOD_SPELLING = {
@@ -102,7 +102,10 @@ class MangoBackend(Backend):
             if not m:
                 offset += len(line)
                 continue
-            parts = m.group("rest").split(",", 3)
+            # Keep the separators, so `bind = SUPER, b, spawn, firefox` comes
+            # back with its spacing and the fields themselves are clean.
+            pieces = re.split(r"(\s*,\s*)", m.group("rest"), maxsplit=3)
+            parts, seps = pieces[::2], pieces[1::2]
             if len(parts) < 3:
                 offset += len(line)
                 continue
@@ -133,6 +136,8 @@ class MangoBackend(Backend):
                         "command": command,
                         "args": args,
                         "flags": m.group("flags") or "",
+                        "eq": m.group("eq"),
+                        "seps": seps,
                         "mods_raw": mods_raw,
                         "key_raw": key_raw,
                     },
@@ -169,7 +174,15 @@ class MangoBackend(Backend):
             command, args = text, ""
         # Preserve bind flags (l/s/r/p) so a locked-screen bind stays one.
         keyword = "bind" + (extras.get("flags") or "")
-        return f"{keyword}={mods},{key},{command},{args}"
+        # The line's own spacing around `=` and each comma; a new bind gets
+        # mango's compact form.
+        eq = extras.get("eq") or "="
+        seps = list(extras.get("seps") or [])
+        had_args = len(seps) == 3
+        seps += [seps[-1] if seps else ","] * (3 - len(seps))
+        # `killclient,` keeps its trailing comma; `reload_config` stays bare.
+        tail = f"{seps[2]}{args}" if args or had_args or not extras else ""
+        return f"{keyword}{eq}{mods}{seps[0]}{key}{seps[1]}{command}{tail}"
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:
         # Append after the final existing bind so new entries stay grouped.

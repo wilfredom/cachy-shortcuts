@@ -85,6 +85,12 @@ class TestRoundTripFidelity:
             )
             assert rendered == shortcut.raw
 
+    def test_mango_edit_keeps_the_lines_spacing(self, mango_rw):
+        target = by_chord(mango_rw.read())["super+r"]
+        editor.retarget(mango_rw, target, "spawn foot")
+        text = target.source.path.read_text()
+        assert "bind = SUPER, r, spawn, foot\n" in text
+
     def test_mango_preserves_raw_keycodes(self, mango_rw):
         found = by_chord(mango_rw.read())
         target = found["code:133+code:64+code:24"]
