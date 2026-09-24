@@ -130,6 +130,32 @@ class TestMangoReader:
         parsed = mango.parse(text, mango.config_paths()[0])
         assert next(s for s in parsed if s.chord.canonical == "super+f9").extras["submap"] == ""
 
+    def test_inline_comments_are_cut_as_mango_cuts_them(self, mango):
+        """remove_comment(): a `#` after whitespace, outside quotes, starts a
+        comment -- on keymode, bind and source lines alike."""
+        text = (
+            "keymode=resize\n"
+            "bind=NONE,Escape,setkeymode,default\n"
+            "keymode=default   # back to normal binds\n"
+            "bind=SUPER,x,spawn,foot # terminal\n"
+            'bind=SUPER,y,spawn,notify-send "a # b"#tail\n'
+        )
+        parsed = by_chord(mango.parse(text, Path("config.conf")))
+        x, y = parsed["super+x"], parsed["super+y"]
+        assert x.extras["keymode"] == "default" and x.extras["submap"] == ""
+        assert x.action == "spawn foot"
+        assert x.raw == "bind=SUPER,x,spawn,foot"
+        assert text[x.source.start : x.source.end] == x.raw
+        assert y.action == 'spawn notify-send "a # b"#tail'
+
+    def test_a_source_line_with_a_comment_is_followed(self, tmp_path):
+        from cachy_shortcuts.backends import MangoBackend
+
+        (tmp_path / "config.conf").write_text("source=./more.conf  # extras\n")
+        (tmp_path / "more.conf").write_text("bind=SUPER,x,spawn,foot\n")
+        backend = MangoBackend(config_root=tmp_path, system_config=tmp_path / "none")
+        assert "super+x" in by_chord(backend.read())
+
     def test_source_optional_and_the_c_flag_are_read(self, mango):
         """Both were skipped, so a taken chord could be offered as free."""
         assert "extra.conf" in [p.name for p in mango.config_paths()]
@@ -261,6 +287,36 @@ class TestHyprlandReader:
         ]
         (conflict,) = conflicts.find_conflicts(parsed)
         assert conflict.chord == Chord.parse("Super+Q")
+
+    def test_inline_comments_end_submap_bind_and_source_lines(self, hyprland):
+        """hyprlang starts a comment at any `#`; `##` is a literal one."""
+        text = (
+            "submap = resize\n"
+            "bind = , right, resizeactive, 10 0\n"
+            "submap = reset   # back to global\n"
+            "bind = SUPER, X, exec, foot # terminal\n"
+            "bind = SUPER, Y, exec, echo ##1 # note\n"
+        )
+        parsed = by_chord(hyprland.parse(text, Path("hyprland.conf")))
+        x = parsed["super+x"]
+        assert x.extras["submap"] == ""
+        assert x.action == "exec foot"
+        assert x.raw == "bind = SUPER, X, exec, foot"
+        assert text[x.source.start : x.source.end] == x.raw
+        assert parsed["super+y"].raw == "bind = SUPER, Y, exec, echo ##1"
+
+    def test_a_submap_line_names_its_submap_before_the_comma(self, hyprland):
+        text = "submap = resize, reset\nbind = , right, resizeactive, 10 0\nsubmap = reset\n"
+        (bind,) = hyprland.parse(text, Path("hyprland.conf"))
+        assert bind.extras["submap"] == "resize"
+
+    def test_a_commented_source_line_is_followed(self, tmp_path):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        (tmp_path / "hyprland.conf").write_text("source = more.conf # extras\n")
+        (tmp_path / "more.conf").write_text("bind = SUPER, X, exec, foot\n")
+        backend = HyprlandBackend(config_root=tmp_path)
+        assert "super+x" in by_chord(backend.read())
 
     def test_newer_bind_flags_are_read(self, hyprland):
         """`bindu` (and a, g, x) were skipped by the older flag list."""

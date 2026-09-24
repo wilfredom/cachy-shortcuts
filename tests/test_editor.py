@@ -233,6 +233,13 @@ class TestSurgicalWrites:
         assert found["super+n"].extras["keymode"] == "default"
         assert path.read_text().startswith("bind=SUPER,n,spawn,obsidian\n")
 
+    def test_editing_a_commented_mango_bind_keeps_the_comment(self, mango_rw):
+        path = mango_rw.config_paths()[0]
+        path.write_text(path.read_text() + "bind=SUPER,F9,spawn,foot  # terminal\n")
+        target = by_chord(mango_rw.read())["super+f9"]
+        editor.retarget(mango_rw, target, "spawn kitty")
+        assert "bind=SUPER,F9,spawn,kitty  # terminal\n" in path.read_text()
+
     def test_add_to_hyprland_stays_out_of_the_submap(self, hypr_rw):
         """A new global bind appended inside a submap would only fire in it."""
         editor.add(hypr_rw, Chord.parse("Super+N"), "exec obsidian", "Notes")

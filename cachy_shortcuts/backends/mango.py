@@ -30,6 +30,25 @@ _SOURCE_RE = re.compile(r"^source(?:-optional)?\s*=\s*(?P<path>.+?)\s*$")
 _KEYMODE_RE = re.compile(r"^keymode\s*=\s*(?P<name>.*?)\s*$")
 
 
+def _code(line: str) -> str:
+    """``line`` without its comment, as mango's remove_comment() cuts it.
+
+    A ``#`` starts a comment when it follows whitespace and is outside
+    quotes (parse_config.c), so ``keymode=default  # normal`` names the mode
+    ``default`` while ``spawn,foo#bar`` keeps its ``#``.
+    """
+    quote = ""
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and i > 0 and line[i - 1].isspace():
+            return line[:i]
+    return line
+
+
 def _scope_of(mode: str) -> str:
     """A keymode as a conflict scope: ``default`` and ``common`` are global."""
     return "" if mode in ("", "default", "common") else mode
@@ -121,7 +140,7 @@ class MangoBackend(Backend):
         except (OSError, UnicodeDecodeError):
             return
         for line in text.splitlines():
-            stripped = line.strip()
+            stripped = _code(line).strip()
             if stripped.startswith("#"):
                 continue
             m = _SOURCE_RE.match(stripped)
@@ -138,7 +157,7 @@ class MangoBackend(Backend):
         # mango starts every config in the default mode (parse_config.c).
         mode = "default"
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
-            stripped = line.strip()
+            stripped = _code(line).strip()
             if not stripped or stripped.startswith("#"):
                 offset += len(line)
                 continue
@@ -254,7 +273,7 @@ class MangoBackend(Backend):
         offset = 0
         mode = "default"
         for line in text.splitlines(keepends=True):
-            stripped = line.strip()
+            stripped = _code(line).strip()
             km = _KEYMODE_RE.match(stripped)
             if km:
                 mode = km.group("name")

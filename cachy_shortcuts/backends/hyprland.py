@@ -262,7 +262,7 @@ class HyprlandBackend(Backend):
         """
         found: list[Path] = []
         for line in text.splitlines():
-            stripped = line.strip()
+            stripped = _code(line).strip()
             if stripped.startswith("#"):
                 continue
             m = _SOURCE_RE.match(stripped)
@@ -318,15 +318,14 @@ class HyprlandBackend(Backend):
         offset = 0
         submap = ""
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
-            stripped = line.strip()
+            stripped = _code(line).strip()
             if not stripped or stripped.startswith("#"):
                 offset += len(line)
                 continue
 
             sub = _SUBMAP_RE.match(stripped)
             if sub:
-                name = sub.group("name")
-                submap = "" if name == "reset" else name
+                submap = _submap_name(sub.group("name"))
                 offset += len(line)
                 continue
 
@@ -438,7 +437,7 @@ class HyprlandBackend(Backend):
         ]
         offset = 0
         for line in text.splitlines(keepends=True):
-            stripped = line.strip()
+            stripped = _code(line).strip()
             if stripped and not stripped.startswith("#"):
                 unbind = _UNBIND_RE.match(stripped)
                 if unbind:
@@ -560,11 +559,10 @@ class HyprlandBackend(Backend):
         offset = 0
         submap = ""
         for line in text.splitlines(keepends=True):
-            stripped = line.strip()
+            stripped = _code(line).strip()
             sub = _SUBMAP_RE.match(stripped)
             if sub:
-                name = sub.group("name")
-                submap = "" if name == "reset" else name
+                submap = _submap_name(sub.group("name"))
                 if submap and first_submap is None:
                     first_submap = offset
             elif not submap and _BIND_RE.match(stripped):
@@ -651,6 +649,21 @@ class HyprlandBackend(Backend):
 # --- helpers ---------------------------------------------------------------
 
 
+def _code(line: str) -> str:
+    """``line`` without its comment, as hyprlang reads it.
+
+    Any ``#`` starts a comment, in quotes or not; ``##`` is an escaped,
+    literal ``#`` (wiki: hyprlang.md, Comments) and is kept as written.
+    """
+    i = line.find("#")
+    while i != -1:
+        if line.startswith("##", i):
+            i = line.find("#", i + 2)
+            continue
+        return line[:i]
+    return line
+
+
 def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str]) -> None:
     """Disable what an ``unbind =`` line removes from the binds before it.
 
@@ -658,7 +671,7 @@ def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str])
     submap (KeybindManager::removeKeybind ignores the submap). A line whose
     chord can't be read removes nothing, as a guess would hide a live bind.
     """
-    value = rest.split("#", 1)[0].strip()
+    value = rest.strip()
     if value == "all":
         targets = earlier
     else:
@@ -714,6 +727,16 @@ def _key_identity(key: str) -> tuple:
     if key.startswith("code:") and key[5:].isdigit():
         return ("code", int(key[5:]))
     return ("key", key)
+
+
+def _submap_name(value: str) -> str:
+    """The submap a ``submap =`` line enters; "" for the global one.
+
+    The value is a list (handleSubmap: CVarList2), so ``submap = resize,
+    reset`` enters ``resize`` and names what resets it.
+    """
+    name = value.split(",", 1)[0].strip()
+    return "" if name == "reset" else name
 
 
 def _split_fields(rest: str, described: bool):
@@ -805,7 +828,7 @@ def _join_action(dispatcher: str, params: str) -> str:
 def _collect_variables(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = _code(line).strip()
         if stripped.startswith("#"):
             continue
         m = _VAR_RE.match(stripped)
