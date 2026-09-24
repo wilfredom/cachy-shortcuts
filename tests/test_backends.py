@@ -117,6 +117,17 @@ class TestMangoReader:
         found = by_chord(mango.read())
         assert found["super+l"].extras["flags"] == "l"
 
+    def test_keymode_bindings_are_tagged(self, mango):
+        scoped = {s.chord.canonical: s for s in mango.read() if s.extras["submap"]}
+        assert set(scoped) == {"h", "l", "super+q"}
+        assert all(s.extras["keymode"] == "resize" for s in scoped.values())
+
+    def test_keymode_default_ends_the_scope(self, mango):
+        """The fixture closes its resize block with `keymode=default`."""
+        text = mango.config_paths()[0].read_text() + "bind=SUPER,F9,spawn,foot\n"
+        parsed = mango.parse(text, mango.config_paths()[0])
+        assert next(s for s in parsed if s.chord.canonical == "super+f9").extras["submap"] == ""
+
     def test_source_optional_and_the_c_flag_are_read(self, mango):
         """Both were skipped, so a taken chord could be offered as free."""
         assert "extra.conf" in [p.name for p in mango.config_paths()]

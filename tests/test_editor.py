@@ -200,6 +200,25 @@ class TestSurgicalWrites:
         # The trailing comment block must not have been displaced.
         assert text.count("# System") == 1
 
+    def test_add_to_mango_stays_out_of_the_keymode(self, mango_rw):
+        """Appended after the resize binds, a new bind would only fire in
+        resize mode."""
+        editor.add(mango_rw, Chord.parse("Super+N"), "spawn obsidian")
+        text = mango_rw.config_paths()[0].read_text()
+        assert text.index("bind=SUPER,n,spawn,obsidian") < text.index("keymode=resize")
+        assert by_chord(mango_rw.read())["super+n"].extras["submap"] == ""
+
+    def test_add_to_a_keymode_only_mango_config_stays_global(self, mango_rw):
+        path = mango_rw.config_paths()[0]
+        path.write_text(
+            "keymode=common\nbind=SUPER,r,reload_config\n"
+            "keymode=resize\nbind=NONE,h,resizewin,-10,0\n"
+        )
+        editor.add(mango_rw, Chord.parse("Super+N"), "spawn obsidian")
+        found = by_chord(mango_rw.read())
+        assert found["super+n"].extras["keymode"] == "default"
+        assert path.read_text().startswith("bind=SUPER,n,spawn,obsidian\n")
+
     def test_add_to_hyprland_stays_out_of_the_submap(self, hypr_rw):
         """A new global bind appended inside a submap would only fire in it."""
         editor.add(hypr_rw, Chord.parse("Super+N"), "exec obsidian", "Notes")

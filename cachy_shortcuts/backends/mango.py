@@ -6,6 +6,11 @@
 
 Grammar is ``bind[flags]=<MODS>,<KEY>,<COMMAND>,<ARGS>`` where ARGS may itself
 contain commas, so the split is limited to three.
+
+``keymode=<name>`` scopes every bind after it to that mode, until the next
+``keymode=`` line. ``default`` is the normal mode and ``common`` binds fire in
+every mode; any other mode's binds are tagged like Hyprland submaps, so they
+are scoped out of conflict detection.
 """
 
 from __future__ import annotations
@@ -22,6 +27,12 @@ from .base import Backend, FloatRule
 _BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrpc]*))(?P<eq>\s*=\s*)(?P<rest>.*)$")
 # ``source-optional`` is ``source`` for a file that may be missing.
 _SOURCE_RE = re.compile(r"^source(?:-optional)?\s*=\s*(?P<path>.+?)\s*$")
+_KEYMODE_RE = re.compile(r"^keymode\s*=\s*(?P<name>.*?)\s*$")
+
+
+def _scope_of(mode: str) -> str:
+    """A keymode as a conflict scope: ``default`` and ``common`` are global."""
+    return "" if mode in ("", "default", "common") else mode
 
 _MANGO_MOD_SPELLING = {
     "super": "SUPER",
@@ -95,9 +106,16 @@ class MangoBackend(Backend):
     def parse(self, text: str, path: Path) -> list[Shortcut]:
         out: list[Shortcut] = []
         offset = 0
+        # mango starts every config in the default mode (parse_config.c).
+        mode = "default"
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
+                offset += len(line)
+                continue
+            km = _KEYMODE_RE.match(stripped)
+            if km:
+                mode = km.group("name")
                 offset += len(line)
                 continue
             m = _BIND_RE.match(stripped)
@@ -140,6 +158,8 @@ class MangoBackend(Backend):
                         "flags": m.group("flags") or "",
                         "eq": m.group("eq"),
                         "seps": seps,
+                        "keymode": mode,
+                        "submap": _scope_of(mode),
                         "mods_raw": mods_raw,
                         "key_raw": key_raw,
                     },
@@ -187,15 +207,32 @@ class MangoBackend(Backend):
         return f"{keyword}{eq}{mods}{seps[0]}{key}{seps[1]}{command}{tail}"
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:
-        # Append after the final existing bind so new entries stay grouped.
+        """After the last *default-mode* bind -- never inside a keymode.
+
+        A bind appended after ``keymode=resize`` only fires in that mode, and
+        one after ``keymode=common`` fires in every mode; either way the new
+        binding would not be the plain global one that was asked for.
+        """
         last_end = 0
+        first_keymode: int | None = None
         offset = 0
+        mode = "default"
         for line in text.splitlines(keepends=True):
-            if _BIND_RE.match(line.strip()):
+            stripped = line.strip()
+            km = _KEYMODE_RE.match(stripped)
+            if km:
+                mode = km.group("name")
+                if first_keymode is None:
+                    first_keymode = offset
+            elif mode == "default" and _BIND_RE.match(stripped):
                 last_end = offset + len(line.rstrip("\n"))
             offset += len(line)
         if last_end:
             return (last_end, "\n", "")
+        if first_keymode is not None:
+            # No default-mode binds to sit beside; the end of the file is
+            # inside whatever keymode came last.
+            return (first_keymode, "", "\n\n")
         prefix = "" if text.endswith("\n") or not text else "\n"
         return (len(text), prefix, "\n")
 

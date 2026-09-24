@@ -209,6 +209,17 @@ class TestConflictDetection:
         # `Escape` is bound only inside the submap, so it is still free.
         assert conflicts.is_available(Chord.parse("Escape"), backend.read())
 
+    def test_a_mango_keymode_chord_does_not_conflict_with_the_global_one(self, env):
+        """mango's `keymode=` scopes binds the way a Hyprland submap does."""
+        from cachy_shortcuts.backends import MangoBackend
+
+        shortcuts = MangoBackend(config_root=env / "mango").read()
+        # The fixture binds Super+Q globally *and* inside keymode=resize.
+        assert len([s for s in shortcuts if s.chord == Chord.parse("Super+Q")]) == 2
+        assert conflicts.find_conflicts(shortcuts) == []
+        assert conflicts.claimant(Chord.parse("Super+Q"), shortcuts).action == "killclient"
+        assert conflicts.is_available(Chord.parse("h"), shortcuts)
+
     def test_claimant_names_the_owning_shell(self, env):
         backend = NiriBackend(config_root=env / "niri")
         message = conflicts.describe_claimant(Chord.parse("Super+S"), backend.read())
