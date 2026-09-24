@@ -35,7 +35,11 @@ from .base import Backend, FloatRule, escape_regex
 
 # Flag letters Hyprland accepts after ``bind``. Spelled out rather than [a-z]*
 # so an unrelated key that merely starts with "bind" isn't parsed as one.
-_BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lrenmtidopsc]*))(?P<eq>\s*=\s*)(?P<rest>.*)$")
+# ``k`` (per-device) is left out on purpose: it puts a DEVICE field after the
+# key, which _split_fields would read as the dispatcher.
+_BIND_RE = re.compile(
+    r"^(?P<kw>bind(?P<flags>[lrenmtidopscagux]*))(?P<eq>\s*=\s*)(?P<rest>.*)$"
+)
 _SOURCE_RE = re.compile(r"^source\s*=\s*(?P<path>.+?)\s*$")
 _VAR_RE = re.compile(r"^\$(?P<name>\w+)\s*=\s*(?P<value>.*?)\s*$")
 _SUBMAP_RE = re.compile(r"^submap\s*=\s*(?P<name>.+?)\s*$")

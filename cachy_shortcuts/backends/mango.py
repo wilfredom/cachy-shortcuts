@@ -18,8 +18,10 @@ from .. import APP_IDS, RULE_MARKER
 from ..model import Chord, Shortcut, SourceRef, infer_category
 from .base import Backend, FloatRule
 
-_BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrp]*))(?P<eq>\s*=\s*)(?P<rest>.*)$")
-_SOURCE_RE = re.compile(r"^source\s*=\s*(?P<path>.+?)\s*$")
+# Flag letters mango accepts after ``bind`` (parse_config.c: ^bind[slrpc]*$).
+_BIND_RE = re.compile(r"^(?P<kw>bind(?P<flags>[lsrpc]*))(?P<eq>\s*=\s*)(?P<rest>.*)$")
+# ``source-optional`` is ``source`` for a file that may be missing.
+_SOURCE_RE = re.compile(r"^source(?:-optional)?\s*=\s*(?P<path>.+?)\s*$")
 
 _MANGO_MOD_SPELLING = {
     "super": "SUPER",
@@ -172,7 +174,7 @@ class MangoBackend(Backend):
             command, args = text.split(" ", 1)
         else:
             command, args = text, ""
-        # Preserve bind flags (l/s/r/p) so a locked-screen bind stays one.
+        # Preserve bind flags (l/s/r/p/c) so a locked-screen bind stays one.
         keyword = "bind" + (extras.get("flags") or "")
         # The line's own spacing around `=` and each comma; a new bind gets
         # mango's compact form.

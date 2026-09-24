@@ -117,6 +117,14 @@ class TestMangoReader:
         found = by_chord(mango.read())
         assert found["super+l"].extras["flags"] == "l"
 
+    def test_source_optional_and_the_c_flag_are_read(self, mango):
+        """Both were skipped, so a taken chord could be offered as free."""
+        assert "extra.conf" in [p.name for p in mango.config_paths()]
+        assert by_chord(mango.read())["super+o"].extras["flags"] == "c"
+
+    def test_a_missing_optional_source_is_not_fatal(self, mango):
+        assert "not-there.conf" not in [p.name for p in mango.config_paths()]
+
     def test_comments_are_skipped(self, mango):
         assert all(not s.raw.startswith("#") for s in mango.read())
 
@@ -161,6 +169,12 @@ class TestHyprlandReader:
         found = by_chord(hyprland.read())
         assert found["super+l"].extras["flags"] == "l"
         assert found["super+mouse:272"].extras["flags"] == "m"
+
+    def test_newer_bind_flags_are_read(self, hyprland):
+        """`bindu` (and a, g, x) were skipped by the older flag list."""
+        found = by_chord(hyprland.read())
+        assert found["super+escape"].extras["flags"] == "u"
+        assert found["super+escape"].action == "submap reset"
 
     def test_raw_keycodes_stay_opaque(self, hyprland):
         found = by_chord(hyprland.read())
