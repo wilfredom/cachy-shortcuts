@@ -255,6 +255,31 @@ class TestSurgicalWrites:
         assert found["super+b"].action == "spawn chromium"
         assert found["super+b"].chord == Chord.parse("Super+B")
 
+    def test_delete_one_of_two_binds_on_the_same_chord(self, mango_rw):
+        """What `conflicts` reports must be fixable: Will's lap2 config binds
+        SUPER+ALT,Left twice, and deleting either copy used to roll back."""
+        path = mango_rw.config_paths()[0]
+        path.write_text(
+            path.read_text()
+            + "bind = SUPER+ALT, Left, focusmon, left\n"
+            + "bind = SUPER+ALT, Left, tagmon, left\n"
+        )
+        chord = Chord.parse("Super+Alt+Left")
+        first = next(s for s in mango_rw.read() if s.chord == chord)
+        editor.delete(mango_rw, first)
+        left = [s for s in mango_rw.read() if s.chord == chord]
+        assert [s.extras["command"].strip() for s in left] == ["tagmon"]
+
+    def test_delete_a_global_bind_whose_chord_a_submap_reuses(self, hypr_rw):
+        """The fixture binds Super+Q globally and inside `submap = resize`."""
+        chord = Chord.parse("Super+Q")
+        target = next(
+            s for s in hypr_rw.read() if s.chord == chord and not s.extras["submap"]
+        )
+        editor.delete(hypr_rw, target)
+        left = [s for s in hypr_rw.read() if s.chord == chord]
+        assert [s.extras["submap"] for s in left] == ["resize"]
+
     def test_hyprland_line_with_trailing_whitespace_is_editable(self, hypr_rw):
         """The recorded span must equal `raw`, or every edit of the line is
         refused as "changed since it was read"."""

@@ -322,6 +322,13 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
         raise EditError(
             f"{path} changed since it was read; refusing to edit the wrong bytes"
         )
+    # Count rather than test for absence: the same chord can legitimately be
+    # bound again in this file (a duplicate, a Hyprland submap, a mango
+    # keymode), and the delete has taken effect once exactly one is gone.
+    def same_chord(parsed: list[Shortcut]) -> int:
+        return sum(1 for s in parsed if s.chord == shortcut.chord)
+
+    before = same_chord(backend.parse(text, path))
     start, end = shortcut.source.start, shortcut.source.end
     # Take the whole line when the binding was alone on it, so deleting does
     # not leave a blank gap behind.
@@ -336,7 +343,7 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
         path,
         new_text,
         "delete",
-        lambda parsed: all(s.chord != shortcut.chord for s in parsed),
+        lambda parsed: same_chord(parsed) == before - 1,
         shortcut.chord,
     )
 
