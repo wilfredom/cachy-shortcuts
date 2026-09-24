@@ -255,6 +255,23 @@ class TestSurgicalWrites:
         assert found["super+b"].action == "spawn chromium"
         assert found["super+b"].chord == Chord.parse("Super+B")
 
+    def test_hyprland_line_with_trailing_whitespace_is_editable(self, hypr_rw):
+        """The recorded span must equal `raw`, or every edit of the line is
+        refused as "changed since it was read"."""
+        path = hypr_rw.config_paths()[0]
+        path.write_text(path.read_text() + "bind = $mainMod, F11, exec, kitty  \n")
+        target = by_chord(hypr_rw.read())["super+f11"]
+        editor.retarget(hypr_rw, target, "exec foot")
+        assert by_chord(hypr_rw.read())["super+f11"].action == "exec foot"
+        assert "bind = $mainMod, F11, exec, foot  \n" in path.read_text()
+
+    def test_mango_line_with_trailing_whitespace_is_deletable(self, mango_rw):
+        path = mango_rw.config_paths()[0]
+        before = path.read_text()
+        path.write_text(before + "bind=SUPER,F11,spawn,foot \n")
+        editor.delete(mango_rw, by_chord(mango_rw.read())["super+f11"])
+        assert path.read_text() == before
+
     def test_editing_is_idempotent_across_a_full_cycle(self, niri_rw):
         """Reading everything and writing it back unchanged is a no-op."""
         path = niri_rw.config_paths()[0]

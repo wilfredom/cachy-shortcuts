@@ -269,7 +269,6 @@ class HyprlandBackend(Backend):
         submap = ""
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
             stripped = line.strip()
-            content_len = len(line.rstrip("\n"))
             if not stripped or stripped.startswith("#"):
                 offset += len(line)
                 continue
@@ -323,7 +322,7 @@ class HyprlandBackend(Backend):
                         backend=self.name,
                         path=path,
                         start=offset + indent,
-                        end=offset + content_len,
+                        end=offset + indent + len(stripped),
                         line=lineno,
                     ),
                     raw=stripped,
