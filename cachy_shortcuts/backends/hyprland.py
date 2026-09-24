@@ -368,6 +368,7 @@ class HyprlandBackend(Backend):
             )
             description = _expand(description_raw, variables).strip()
             indent = len(line) - len(line.lstrip())
+            flags = m.group("flags") or ""
             out.append(
                 Shortcut(
                     chord=chord,
@@ -383,7 +384,7 @@ class HyprlandBackend(Backend):
                     ),
                     raw=stripped,
                     extras={
-                        "flags": m.group("flags") or "",
+                        "flags": flags,
                         "eq": m.group("eq"),
                         "seps": seps,
                         "mods_raw": mods_raw,
@@ -392,7 +393,11 @@ class HyprlandBackend(Backend):
                         "dispatcher_raw": dispatcher_raw,
                         "params_raw": params_raw,
                         "had_params": had_params,
-                        "submap": submap,
+                        # `u` (submap-universal) fires in every submap, the
+                        # global one included (KeybindManager.cpp:652), so it
+                        # competes with global chords wherever it is written.
+                        "submap": "" if "u" in flags else submap,
+                        "block": submap,
                     },
                 )
             )

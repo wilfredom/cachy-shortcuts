@@ -241,6 +241,27 @@ class TestHyprlandReader:
         parsed = hyprland.parse(text, Path("hyprland.conf"))
         assert [bool(s.extras.get("disabled")) for s in parsed] == [True, True]
 
+    def test_a_universal_bind_in_a_submap_competes_with_global_chords(self, hyprland):
+        """`bindu` fires in every submap, the global one included, so it is
+        scoped as global wherever it is written."""
+        from cachy_shortcuts import conflicts
+
+        text = (
+            "bind = SUPER, Q, killactive,\n"
+            "submap = resize\n"
+            "bindu = SUPER, Q, submap, reset\n"
+            "bind = , escape, submap, reset\n"
+            "submap = reset\n"
+        )
+        parsed = hyprland.parse(text, Path("hyprland.conf"))
+        assert [(s.extras["submap"], s.extras["block"]) for s in parsed] == [
+            ("", ""),
+            ("", "resize"),
+            ("resize", "resize"),
+        ]
+        (conflict,) = conflicts.find_conflicts(parsed)
+        assert conflict.chord == Chord.parse("Super+Q")
+
     def test_newer_bind_flags_are_read(self, hyprland):
         """`bindu` (and a, g, x) were skipped by the older flag list."""
         found = by_chord(hyprland.read())
