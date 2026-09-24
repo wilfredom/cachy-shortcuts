@@ -77,7 +77,26 @@ def cmd_list(args) -> int:
             print(f"warning: {reason}", file=sys.stderr)
     collected: list[tuple[Backend, list[Shortcut]]] = [(b, b.read()) for b in backends]
 
+    # One filter for both output modes, so a script sees what a person sees.
+    query = (args.query or "").strip().lower()
+    if query:
+        collected = [
+            (
+                backend,
+                [
+                    s
+                    for s in shortcuts
+                    if query in s.chord.display().lower()
+                    or query in s.label.lower()
+                    or query in s.action.lower()
+                ],
+            )
+            for backend, shortcuts in collected
+        ]
+
     if args.json:
+        # Join on `chord` (canonical), not `action`: actions are in each
+        # backend's own syntax.
         payload = [
             {
                 "backend": backend.name,
@@ -90,6 +109,11 @@ def cmd_list(args) -> int:
                         "category": s.category.value,
                         "source": s.source.location if s.source else None,
                         "disabled": bool(s.extras.get("disabled")),
+                        # Hyprland submap / mango keymode; null when global.
+                        "scope": s.extras.get("submap") or None,
+                        "owner": s.owner,
+                        # A COSMIC system default: an edit becomes an override.
+                        "readonly": bool(s.extras.get("readonly")),
                     }
                     for s in shortcuts
                 ],
@@ -99,16 +123,7 @@ def cmd_list(args) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    query = (args.query or "").strip().lower()
     for backend, shortcuts in collected:
-        if query:
-            shortcuts = [
-                s
-                for s in shortcuts
-                if query in s.chord.display().lower()
-                or query in s.label.lower()
-                or query in s.action.lower()
-            ]
         if not shortcuts:
             continue
         print(_c(f"\n{backend.display_name}", BOLD), _c(f"({len(shortcuts)})", DIM))

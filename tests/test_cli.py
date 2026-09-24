@@ -52,6 +52,21 @@ class TestListCommand:
         assert "Open Browser" in out
         assert "close-window" not in out
 
+    def test_json_honours_the_query(self, env, capsys):
+        cli.main(["list", "--json", "--backend", "mango", "firefox"])
+        payload = json.loads(capsys.readouterr().out)
+        assert [s["chord"] for s in payload[0]["shortcuts"]] == ["super+b"]
+
+    def test_json_carries_scope_owner_and_readonly(self, env, capsys):
+        cli.main(["list", "--json", "--all"])
+        payload = {e["backend"]: e["shortcuts"] for e in json.loads(capsys.readouterr().out)}
+        mango = {(s["chord"], s["scope"]) for s in payload["mango"]}
+        assert ("super+q", "resize") in mango and ("super+q", None) in mango
+        dms = next(s for s in payload["mango"] if s["chord"] == "super+space")
+        assert dms["owner"] == "DMS"
+        cosmic = {s["chord"]: s["readonly"] for s in payload["cosmic"]}
+        assert cosmic["super+b"] is False
+
     def test_active_session_is_used_when_no_flag_given(self, env, capsys):
         cli.main(["list", "--json"])
         payload = json.loads(capsys.readouterr().out)
