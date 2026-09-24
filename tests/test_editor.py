@@ -510,6 +510,24 @@ class TestCosmicOverrides:
         editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
         assert 'key: "w"): Disable,' in custom.read_text()
 
+    def test_a_brace_in_a_comment_around_the_map_is_not_its_end(self, cosmic_rw):
+        """The closing brace is matched, not taken as the last `}` in the
+        file: a comment after (or before) the map may hold one."""
+        custom = cosmic_rw._custom
+        custom.write_text(
+            "// shortcuts {see docs}\n"
+            "{\n"
+            '    (modifiers: [Super], key: "b"): Spawn("firefox"),\n'
+            "}\n"
+            "// see {} docs\n"
+        )
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        text = custom.read_text()
+        assert text.endswith('Spawn("foot"),\n}\n// see {} docs\n')
+        found = by_chord(cosmic_rw.read())
+        assert found["super+y"].action == 'Spawn("foot")'
+        assert found["super+b"].action == 'Spawn("firefox")'
+
     def test_repeated_adds_do_not_stack_blank_lines(self, cosmic_rw):
         editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
         editor.add(cosmic_rw, Chord.parse("Super+U"), "kitty")

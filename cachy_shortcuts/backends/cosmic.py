@@ -84,11 +84,11 @@ class CosmicBackend(Backend):
     def parse(self, text: str, path: Path) -> list[Shortcut]:
         sc = Scanner(text)
         out: list[Shortcut] = []
-        i = text.find("{")
-        if i == -1:
+        bounds = _map_bounds(text, sc)
+        if bounds is None:
             return []
+        i, end = bounds
         i += 1
-        end = text.rfind("}")
         if end == -1:
             end = len(text)
         while i < end:
@@ -171,16 +171,19 @@ class CosmicBackend(Backend):
         return f'(modifiers: [{mods}], key: "{key}"): {value},'
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:
-        close = text.rfind("}")
-        if close == -1:
+        sc = Scanner(text)
+        bounds = _map_bounds(text, sc)
+        if bounds is None or bounds[1] == -1:
             return (len(text), "{\n    ", "\n}\n")
+        # The brace that closes the map, found by matching rather than by
+        # the last `}` in the file: a comment after the map may hold one.
+        opening, close = bounds
         head_end = len(text[:close].rstrip())
         # RON separates map entries with commas and only the trailing one is
         # optional, so the last entry may not have one. Find the last real
         # token before the closing brace -- not whitespace, not a comment.
-        sc = Scanner(text)
         last = -1
-        i = text.find("{") + 1
+        i = opening + 1
         while i < close:
             i = sc.skip_trivia(i)
             if i >= close:
@@ -241,6 +244,25 @@ class CosmicBackend(Backend):
 
 def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _map_bounds(text: str, sc: Scanner) -> tuple[int, int] | None:
+    """Offsets of the map's ``{`` and of the ``}`` that closes it.
+
+    None when there is no map; the closing offset is -1 when the map is never
+    closed. Comments and strings are skipped both ways, so a ``{`` or ``}``
+    inside either -- before the map, in it, or after it -- is not taken for
+    the map's own.
+    """
+    opening = sc.skip_trivia(0)
+    if opening >= len(text) or text[opening] != "{":
+        opening = text.find("{")
+        if opening == -1:
+            return None
+    end = sc.match_brace(opening)
+    if end > len(text) or text[end - 1] != "}":
+        return (opening, -1)
+    return (opening, end - 1)
 
 
 def _match(text: str, sc: Scanner, i: int, open_ch: str, close_ch: str) -> int:
