@@ -7,6 +7,7 @@ being undone -- and so a *failed* edit rolls itself back automatically.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -156,8 +157,67 @@ def restore(snapshot: Snapshot) -> list[Path]:
     return restored
 
 
-def restore_latest() -> list[Path]:
+class UndoRefused(RuntimeError):
+    """Undo would destroy changes made to a file after the edit."""
+
+    def __init__(self, snapshot: Snapshot, changed: list[Path]) -> None:
+        self.snapshot = snapshot
+        self.changed = changed
+        names = ", ".join(str(p) for p in changed)
+        super().__init__(
+            f"{names} changed after that edit ({snapshot.reason}, {snapshot.stamp}), "
+            "so undoing it would throw the newer change away. "
+            "`cachy-shortcuts undo --force` undoes it anyway, keeping a copy of "
+            "the current file(s) in a snapshot of their own."
+        )
+
+
+def _digest(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
+def seal(snapshot: Snapshot) -> None:
+    """Record what each file holds now that the edit has been written.
+
+    ``restore_latest`` compares against it, so an undo can tell whether a
+    file changed after the edit -- COSMIC Settings rewriting ``custom``, a
+    hand edit -- and refuse rather than throw that change away.
+    """
+    manifest = snapshot.path / MANIFEST
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    for entry in data.get("files", []):
+        entry["after"] = _digest(Path(entry["original"]))
+    manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def changed_since(snapshot: Snapshot) -> list[Path]:
+    """Files that now hold something other than what the edit wrote.
+
+    A file that is gone has nothing to lose. A snapshot never sealed (one
+    from an older version, or a write that did not finish) has nothing to
+    compare against, so nothing is reported.
+    """
+    data = json.loads((snapshot.path / MANIFEST).read_text(encoding="utf-8"))
+    changed: list[Path] = []
+    for entry in data.get("files", []):
+        if "after" not in entry:
+            continue
+        original = Path(entry["original"])
+        now = _digest(original)
+        if now is not None and now != entry["after"]:
+            changed.append(original)
+    return changed
+
+
+def restore_latest(force: bool = False) -> list[Path]:
     """Restore the newest snapshot not already undone, and mark it undone.
+
+    A file changed after the edit raises UndoRefused. ``force`` undoes it
+    anyway, after copying the current files into a snapshot of their own
+    (marked undone, so later undos walk past it; ``restore`` brings it back).
 
     A marker rather than deleting the snapshot keeps `restore --list` history
     intact; skipping marked ones is what makes a second undo walk back.
@@ -165,10 +225,21 @@ def restore_latest() -> list[Path]:
     for snapshot in list_snapshots():
         if (snapshot.path / UNDONE).exists():
             continue
+        changed = changed_since(snapshot)
+        if changed:
+            if not force:
+                raise UndoRefused(snapshot, changed)
+            kept = create(changed, reason=f"before forced undo of {snapshot.id}")
+            mark_undone(kept)
         restored = restore(snapshot)
-        (snapshot.path / UNDONE).touch()
+        mark_undone(snapshot)
         return restored
     return []
+
+
+def mark_undone(snapshot: Snapshot) -> None:
+    """Leave ``snapshot`` in the history, but out of `undo`'s way."""
+    (snapshot.path / UNDONE).touch()
 
 
 def absorb(into: Snapshot, other: Snapshot) -> None:

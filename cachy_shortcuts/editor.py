@@ -132,6 +132,7 @@ def _commit(
                 f"{operation} rolled back: {chord.display()} would not fire, "
                 f"because {why}"
             )
+    backup.seal(snapshot)
     backend.reload()
     backup.prune()
     return EditResult(operation=operation, path=path, snapshot=snapshot, chord=chord)
@@ -201,6 +202,7 @@ def write_file(
     if not validate(written):
         _rollback(snapshot)
         raise EditError(f"{operation} did not take effect, rolled back")
+    backup.seal(snapshot)
     backup.prune()
     return EditResult(operation=operation, path=path, snapshot=snapshot)
 
@@ -330,6 +332,7 @@ def take_over(
         backup.discard(combined)  # nothing changed; undo keeps its last edit
         raise
     backup.absorb(combined, removed.snapshot)
+    backup.seal(combined)  # each write re-seals it, in case the next one fails
     # Every other binding on the chord in the victim's scope goes too. In
     # Hyprland they would all fire alongside the new one; in mango the first
     # one left would fire instead of it (keyboard.c stops at the first match).
@@ -342,6 +345,7 @@ def take_over(
         tried.add((backend.write_path(other.source.path), other.raw))
         extra = delete(backend, other)
         backup.absorb(combined, extra.snapshot)
+        backup.seal(combined)
         also_removed.append(other)
     if target is None:
         result = add(backend, chord, action, description)
@@ -351,6 +355,7 @@ def take_over(
             backend, fresh, chord=chord, action=action, description=description
         )
     backup.absorb(combined, result.snapshot)
+    backup.seal(combined)
     result.snapshot = combined
     result.also_removed = also_removed
     return result
@@ -560,9 +565,9 @@ def _bindings(parsed: list[Shortcut]) -> Counter:
     return Counter((s.chord.canonical, s.action, s.raw) for s in parsed)
 
 
-def undo_last() -> list[Path]:
-    """Roll back the most recent write."""
-    return backup.restore_latest()
+def undo_last(force: bool = False) -> list[Path]:
+    """Roll back the most recent write. See ``backup.restore_latest``."""
+    return backup.restore_latest(force=force)
 
 
 def wrap_command_as_action(backend: Backend, command: str) -> str:

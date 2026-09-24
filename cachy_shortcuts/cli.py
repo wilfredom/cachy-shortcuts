@@ -314,7 +314,10 @@ def cmd_rm(args) -> int:
 
 
 def cmd_undo(args) -> int:
-    restored = editor.undo_last()
+    try:
+        restored = editor.undo_last(force=args.force)
+    except backup.UndoRefused as exc:
+        _die(str(exc))
     if not restored:
         print("Nothing to undo.")
         return 1
@@ -337,6 +340,8 @@ def cmd_restore(args) -> int:
     if match is None:
         _die(f"no snapshot {args.snapshot!r}")
     restored = backup.restore(match)
+    # Restored by hand, it is not what the next `undo` should restore.
+    backup.mark_undone(match)
     print(_c(f"restored {len(restored)} file(s) from {match.id}", ACCENT))
     return 0
 
@@ -459,6 +464,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_rm.set_defaults(func=cmd_rm)
 
     p_undo = sub.add_parser("undo", help="roll back the most recent change")
+    p_undo.add_argument(
+        "--force",
+        action="store_true",
+        help="undo even if the file changed since, keeping a copy of it first",
+    )
     p_undo.set_defaults(func=cmd_undo)
 
     p_restore = sub.add_parser("restore", help="list or restore config snapshots")

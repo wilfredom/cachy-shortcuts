@@ -747,6 +747,35 @@ class TestSafety:
             editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
         assert not custom.exists()
 
+    def test_undo_refuses_to_delete_a_file_changed_since(self, cosmic_rw):
+        """The add created custom; COSMIC Settings then added a binding of
+        its own to it. Undo would delete the file, and that binding with it."""
+        custom = cosmic_rw._custom
+        custom.unlink()
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        mine = custom.read_text().replace(
+            "}", '    (modifiers: [Super], key: "m"): Spawn("mine"),\n}'
+        )
+        custom.write_text(mine)
+        with pytest.raises(backup.UndoRefused, match="changed after that edit"):
+            editor.undo_last()
+        assert custom.read_text() == mine
+
+        assert editor.undo_last(force=True) == [custom.resolve()]
+        assert not custom.exists()
+        kept = backup.list_snapshots()[0]
+        assert kept.reason.startswith("before forced undo")
+        backup.restore(kept)
+        assert custom.read_text() == mine
+
+    def test_undo_refuses_to_overwrite_a_file_changed_since(self, mango_rw):
+        path = mango_rw.write_target()
+        editor.retarget(mango_rw, by_chord(mango_rw.read())["super+b"], "spawn chromium")
+        path.write_text(path.read_text() + "# a hand edit\n")
+        with pytest.raises(backup.UndoRefused):
+            editor.undo_last()
+        assert path.read_text().endswith("# a hand edit\n")
+
     def test_a_second_undo_walks_further_back(self, mango_rw):
         path = mango_rw.config_paths()[0]
         before = path.read_text()

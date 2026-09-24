@@ -5,7 +5,7 @@ import shutil
 
 import pytest
 
-from cachy_shortcuts import appscan, cli, conflicts, usage
+from cachy_shortcuts import appscan, backup, cli, conflicts, usage
 from cachy_shortcuts.backends import NiriBackend
 from cachy_shortcuts.model import Chord, Shortcut, SourceRef, describe_action
 
@@ -123,6 +123,27 @@ class TestMutatingCommands:
         assert path.read_text() != before
         assert cli.main(["undo"]) == 0
         assert path.read_text() == before
+
+    def test_undo_refuses_a_file_changed_since_and_force_overrides(self, env, capsys):
+        path = env / "niri" / "cfg" / "keybinds.kdl"
+        before = path.read_text()
+        cli.main(["add", "Super+N", "obsidian", "--backend", "niri"])
+        path.write_text(path.read_text() + "// a hand edit\n")
+        with pytest.raises(SystemExit):
+            cli.main(["undo"])
+        assert "undo --force" in capsys.readouterr().err
+        assert cli.main(["undo", "--force"]) == 0
+        assert path.read_text() == before
+
+    def test_an_explicit_restore_is_not_undone_again(self, env, capsys):
+        path = env / "niri" / "cfg" / "keybinds.kdl"
+        before = path.read_text()
+        cli.main(["add", "Super+N", "obsidian", "--backend", "niri"])
+        newest = backup.list_snapshots()[0]
+        assert cli.main(["restore", newest.id]) == 0
+        assert path.read_text() == before
+        assert cli.main(["undo"]) == 1
+        assert "Nothing to undo" in capsys.readouterr().out
 
     def test_undo_with_nothing_to_undo(self, env, capsys):
         assert cli.main(["undo"]) == 1
