@@ -1,5 +1,7 @@
 """Parser tests against realistic configs for every supported compositor."""
 
+from pathlib import Path
+
 import pytest
 
 from cachy_shortcuts.model import Category, Chord
@@ -180,6 +182,40 @@ class TestHyprlandReader:
         found = by_chord(hyprland.read())
         assert found["super+l"].extras["flags"] == "l"
         assert found["super+mouse:272"].extras["flags"] == "m"
+
+    def test_an_unbind_in_a_later_file_disables_the_earlier_bind(self, hyprland):
+        """overrides.conf, sourced last, unbinds Super+T and rebinds it."""
+        from cachy_shortcuts import conflicts
+
+        shortcuts = hyprland.read()
+        on_t = [s for s in shortcuts if s.chord == Chord.parse("Super+T")]
+        assert [(s.action, bool(s.extras.get("disabled"))) for s in on_t] == [
+            ("togglefloating", True),
+            ("exec alacritty", False),
+        ]
+        assert conflicts.find_conflicts(shortcuts) == []
+        claimed = conflicts.claimant(Chord.parse("Super+T"), shortcuts)
+        assert claimed.action == "exec alacritty"
+
+    def test_sourced_binds_sit_where_their_source_line_is(self, hyprland):
+        order = [s.chord.canonical for s in hyprland.read()]
+        # `source = binds.conf` comes before the Applications section.
+        assert order.index("super+p") < order.index("super+return")
+
+    def test_unbind_reaches_earlier_binds_in_the_same_file(self, hyprland):
+        text = (
+            "bind = SUPER, Q, killactive,\n"
+            "submap = resize\nbind = SUPER, Q, submap, reset\nsubmap = reset\n"
+            "unbind = SUPER, Q\n"
+            "bind = SUPER, Q, exec, foot\n"
+        )
+        parsed = hyprland.parse(text, Path("hyprland.conf"))
+        assert [bool(s.extras.get("disabled")) for s in parsed] == [True, True, False]
+
+    def test_unbind_all_clears_everything_above_it(self, hyprland):
+        text = "bind = SUPER, Q, killactive,\nunbind = all\nbind = SUPER, W, exec, foot\n"
+        parsed = hyprland.parse(text, Path("hyprland.conf"))
+        assert [bool(s.extras.get("disabled")) for s in parsed] == [True, False]
 
     def test_newer_bind_flags_are_read(self, hyprland):
         """`bindu` (and a, g, x) were skipped by the older flag list."""

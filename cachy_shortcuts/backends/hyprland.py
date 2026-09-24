@@ -19,6 +19,12 @@ Two things separate this from the otherwise-similar Mango format:
 * **Submaps.** Binds between ``submap = name`` and ``submap = reset`` only fire
   inside that mode, so they are tagged and scoped out of conflict detection
   rather than compared against global chords.
+
+``unbind = MODS, KEY`` removes every bind made on that chord before it, in any
+submap, and ``unbind = all`` removes them all. ``source =`` is evaluated
+inline, so an unbind in a file sourced later reaches binds from earlier files;
+``read`` walks the files in that order. Unbound binds are kept but marked
+disabled, so the overlay still lists them and conflict checks skip them.
 """
 
 from __future__ import annotations
@@ -43,6 +49,7 @@ _BIND_RE = re.compile(
 _SOURCE_RE = re.compile(r"^source\s*=\s*(?P<path>.+?)\s*$")
 _VAR_RE = re.compile(r"^\$(?P<name>\w+)\s*=\s*(?P<value>.*?)\s*$")
 _SUBMAP_RE = re.compile(r"^submap\s*=\s*(?P<name>.+?)\s*$")
+_UNBIND_RE = re.compile(r"^unbind\s*=\s*(?P<rest>.*)$")
 _VAR_REF_RE = re.compile(r"\$(\w+)")
 
 # Hyprland's own modifier names, longest first so a greedy scan splits
@@ -285,6 +292,12 @@ class HyprlandBackend(Backend):
                 offset += len(line)
                 continue
 
+            unbind = _UNBIND_RE.match(stripped)
+            if unbind:
+                _apply_unbind(out, unbind.group("rest"), variables)
+                offset += len(line)
+                continue
+
             m = _BIND_RE.match(stripped)
             if not m:
                 offset += len(line)
@@ -347,6 +360,60 @@ class HyprlandBackend(Backend):
             )
             offset += len(line)
         return out
+
+    def read(self) -> list[Shortcut]:
+        """Every bind, in the order Hyprland evaluates them.
+
+        ``source =`` is inline, so a sourced file's binds sit where its
+        ``source`` line is, and an ``unbind`` reaches every bind before it --
+        including one from the main file or an earlier include, which is the
+        usual "overrides file" layout.
+        """
+        paths = self.config_paths()
+        if not paths:
+            return []
+        out: list[Shortcut] = []
+        self._read_inline(paths[0], out, set(), self.variables())
+        return out
+
+    def _read_inline(
+        self, path: Path, out: list[Shortcut], visited: set[Path], variables: dict
+    ) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved in visited or not path.exists():
+            return
+        visited.add(resolved)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        events: list[tuple[int, object]] = [
+            (s.source.start, s) for s in self.parse(text, path)
+        ]
+        offset = 0
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                unbind = _UNBIND_RE.match(stripped)
+                if unbind:
+                    events.append((offset, ("unbind", unbind.group("rest"))))
+                elif _SOURCE_RE.match(stripped):
+                    events.append(
+                        (offset, ("source", self._sourced_paths(stripped, path.parent)))
+                    )
+            offset += len(line)
+        events.sort(key=lambda event: event[0])
+        for _, item in events:
+            if isinstance(item, Shortcut):
+                out.append(item)
+            elif item[0] == "unbind":
+                _apply_unbind(out, item[1], variables)
+            else:
+                for target in item[1]:
+                    self._read_inline(target, out, visited, variables)
 
     # --- writing -----------------------------------------------------------
 
@@ -536,6 +603,30 @@ class HyprlandBackend(Backend):
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str]) -> None:
+    """Disable what an ``unbind =`` line removes from the binds before it.
+
+    ``all`` clears every bind; otherwise every bind on the chord goes, in any
+    submap (KeybindManager::removeKeybind ignores the submap). A line whose
+    chord can't be read removes nothing, as a guess would hide a live bind.
+    """
+    value = rest.split("#", 1)[0].strip()
+    if value == "all":
+        targets = earlier
+    else:
+        mods_raw, _, key_raw = value.partition(",")
+        try:
+            chord = Chord.from_parts(
+                split_mods(_expand(mods_raw, variables)),
+                _expand(key_raw.split(",", 1)[0], variables),
+            )
+        except (KeyError, ValueError):
+            return
+        targets = [s for s in earlier if s.chord == chord]
+    for shortcut in targets:
+        shortcut.extras["disabled"] = True
 
 
 def _split_fields(rest: str, described: bool):

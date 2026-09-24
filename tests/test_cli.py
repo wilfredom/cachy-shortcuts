@@ -92,6 +92,12 @@ class TestMutatingCommands:
         assert cli.main(["undo"]) == 1
         assert "Nothing to undo" in capsys.readouterr().out
 
+    def test_rm_removes_the_live_bind_not_the_unbound_one(self, env):
+        """overrides.conf unbinds the main file's Super+T and rebinds it."""
+        assert cli.main(["rm", "Super+T", "--backend", "hyprland"]) == 0
+        assert "exec, $terminal" not in (env / "hypr" / "overrides.conf").read_text()
+        assert "$mainMod, T, togglefloating" in (env / "hypr" / "hyprland.conf").read_text()
+
     def test_bad_chord_is_rejected_clearly(self, env, capsys):
         with pytest.raises(SystemExit):
             cli.main(["add", "Hyper+Q", "foo", "--backend", "niri"])
