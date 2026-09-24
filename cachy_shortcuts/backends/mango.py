@@ -30,6 +30,7 @@ _MANGO_MOD_SPELLING = {
 
 _MANGO_KEY_SPELLING = {
     "return": "Return",
+    "kp_enter": "KP_Enter",
     "escape": "Escape",
     "space": "space",
     "tab": "Tab",

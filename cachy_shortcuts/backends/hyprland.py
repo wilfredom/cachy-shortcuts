@@ -70,6 +70,7 @@ _HYPR_MOD_SPELLING = {
 # when emitting a brand-new bind; parsed binds keep their original spelling.
 _HYPR_KEY_SPELLING = {
     "return": "Return",
+    "kp_enter": "KP_Enter",
     "escape": "Escape",
     "space": "space",
     "tab": "Tab",

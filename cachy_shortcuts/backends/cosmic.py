@@ -34,6 +34,7 @@ _COSMIC_MOD_SPELLING = {
 
 _COSMIC_KEY_SPELLING = {
     "return": "Return",
+    "kp_enter": "KP_Enter",
     "escape": "Escape",
     "space": "space",
     "page_up": "Prior",

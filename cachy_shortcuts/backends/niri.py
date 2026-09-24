@@ -20,6 +20,7 @@ from .base import Backend, FloatRule, escape_regex
 # byte-identical.
 _NIRI_KEY_SPELLING: dict[str, str] = {
     "return": "Return",
+    "kp_enter": "KP_Enter",
     "escape": "Escape",
     "space": "Space",
     "tab": "Tab",

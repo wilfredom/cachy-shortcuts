@@ -60,8 +60,11 @@ _KEY_ALIASES: dict[str, str] = {
     # Enter / escape
     "return": "return",
     "enter": "return",
-    "kp_enter": "return",
-    "kpenter": "return",
+    # Keypad Enter is its own xkb keysym (KP_Enter 0xff8d, Return 0xff0d), and
+    # a bind on one does not fire on the other: folding them together merges
+    # two physical keys.
+    "kp_enter": "kp_enter",
+    "kpenter": "kp_enter",
     "escape": "escape",
     "esc": "escape",
     # Whitespace-ish
@@ -140,6 +143,7 @@ _KEY_DISPLAY: dict[str, str] = {
     "grave": "`",
     "page_up": "PGUP",
     "page_down": "PGDN",
+    "kp_enter": "KP ENTER",
 }
 
 # Friendly names for the XF86 media keys that show up in every real config.

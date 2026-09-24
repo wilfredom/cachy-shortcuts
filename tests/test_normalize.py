@@ -30,6 +30,13 @@ class TestCrossDialectEquivalence:
     def test_return_aliases(self):
         assert Chord.parse("Mod+Return") == Chord.parse("SUPER+enter")
 
+    def test_keypad_enter_is_its_own_key(self):
+        """KP_Enter (0xff8d) and Return (0xff0d) are different xkb keysyms:
+        a bind on one never fires on the other."""
+        assert Chord.parse("Super+KP_Enter") != Chord.parse("Super+Return")
+        assert Chord.parse("Super+KP_Enter") == Chord.parse("SUPER+KPEnter")
+        assert Chord.parse("Super+KP_Enter").display() == "SUPER + KP ENTER"
+
     def test_case_insensitivity(self):
         assert Chord.parse("MOD+SHIFT+B") == Chord.parse("mod+shift+b")
 

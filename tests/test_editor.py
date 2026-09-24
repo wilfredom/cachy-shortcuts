@@ -280,6 +280,18 @@ class TestSurgicalWrites:
         left = [s for s in hypr_rw.read() if s.chord == chord]
         assert [s.extras["submap"] for s in left] == ["resize"]
 
+    def test_rebinding_keypad_enter_keeps_the_keypad_key(self, hypr_rw):
+        target = by_chord(hypr_rw.read())["super+kp_enter"]
+        editor.rebind(hypr_rw, target, Chord.parse("Super+Shift+KP_Enter"))
+        text = target.source.path.read_text()
+        assert "bind = $mainMod SHIFT, KP_Enter, exec, $terminal" in text
+
+    def test_deleting_keypad_enter_leaves_return_alone(self, hypr_rw):
+        editor.delete(hypr_rw, by_chord(hypr_rw.read())["super+kp_enter"])
+        after = by_chord(hypr_rw.read())
+        assert "super+kp_enter" not in after
+        assert "super+return" in after
+
     def test_hyprland_line_with_trailing_whitespace_is_editable(self, hypr_rw):
         """The recorded span must equal `raw`, or every edit of the line is
         refused as "changed since it was read"."""

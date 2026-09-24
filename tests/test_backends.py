@@ -177,6 +177,14 @@ class TestHyprlandReader:
             text = shortcut.source.path.read_text()
             assert text[shortcut.source.start : shortcut.source.end] == shortcut.raw
 
+    def test_keypad_enter_is_not_a_second_return(self, hyprland):
+        """binds.conf binds KP_Enter to the same terminal as Return."""
+        from cachy_shortcuts import conflicts
+
+        found = by_chord(hyprland.read())
+        assert found["super+kp_enter"].action == found["super+return"].action
+        assert conflicts.find_conflicts(hyprland.read()) == []
+
     def test_noctalia_binds_are_attributed(self, hyprland):
         found = by_chord(hyprland.read())
         assert found["super+space"].owner == "Noctalia"
