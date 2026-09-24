@@ -1134,6 +1134,7 @@ class TestTakeOver:
                 "bind=SUPER,b,",
                 "bind = SUPER+ALT, Left, focusmon, left\n"
                 "bind = SUPER+ALT, Left, tagmon, left\n"
+                "bind = SUPER+ALT, Left, tagmon, left\n"
                 "bind=SUPER,b,",
                 1,
             )
@@ -1143,13 +1144,13 @@ class TestTakeOver:
         shortcuts = mango_rw.read()
         victim = conflicts.claimant(chord, shortcuts)
         assert victim.extras["command"] == "focusmon"
-        tagmon = next(s for s in shortcuts if s.chord == chord and s is not victim)
-        assert "focusmon" in tagmon.extras["shadowed_by"]
+        tagmons = [s for s in shortcuts if s.chord == chord and s is not victim]
+        assert all("focusmon" in s.extras["shadowed_by"] for s in tagmons)
 
         result = editor.take_over(mango_rw, victim, None, chord, "spawn foot")
         on_chord = [s for s in mango_rw.read() if s.chord == chord]
         assert [s.action for s in on_chord] == ["spawn foot"]
-        assert [s.extras["command"] for s in result.also_removed] == ["tagmon"]
+        assert [s.extras["command"] for s in result.also_removed] == ["tagmon"] * 2
         editor.undo_last()
         assert path.read_text() == written
 

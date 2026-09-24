@@ -337,12 +337,12 @@ def take_over(
     # Hyprland they would all fire alongside the new one; in mango the first
     # one left would fire instead of it (keyboard.c stops at the first match).
     also_removed: list[Shortcut] = []
-    tried: set[tuple[Path, str]] = set()
-    while True:
-        other = _rival(backend, victim, target, tried)
+    # Each delete is checked to have removed exactly one binding, so this
+    # ends; the bound only guards against a backend that breaks that.
+    for _ in range(64):
+        other = _rival(backend, victim, target)
         if other is None:
             break
-        tried.add((backend.write_path(other.source.path), other.raw))
         extra = delete(backend, other)
         backup.absorb(combined, extra.snapshot)
         backup.seal(combined)
@@ -362,10 +362,7 @@ def take_over(
 
 
 def _rival(
-    backend: Backend,
-    victim: Shortcut,
-    target: Shortcut | None,
-    tried: set[tuple[Path, str]],
+    backend: Backend, victim: Shortcut, target: Shortcut | None
 ) -> Shortcut | None:
     """Another binding still on the victim's chord, in the victim's scope.
 
@@ -373,7 +370,7 @@ def _rival(
     the user's file whatever it binds, so neither needs removing.
     """
     scope = victim.extras.get("submap") or ""
-    avoid = set(tried)
+    avoid = set()
     if target is not None and target.source is not None:
         avoid.add((backend.write_path(target.source.path), target.raw))
     for shortcut in backend.read():
