@@ -341,14 +341,27 @@ def _replace(
             f"{path} changed since it was read; refusing to edit the wrong bytes"
         )
     new_text = text[: shortcut.source.start] + rendered + text[shortcut.source.end :]
-    return _commit(
-        backend,
-        path,
-        new_text,
-        operation,
-        lambda parsed: any(s.chord == new_chord for s in parsed),
-        new_chord,
+    old_chord = shortcut.chord
+    shield = (
+        isinstance(backend, CosmicBackend)
+        and new_chord != old_chord
+        and backend.default_at(old_chord) is not None
+        and not any(s.chord == old_chord for s in backend.parse(new_text, path))
     )
+    if shield:
+        # This entry was overriding a default on its old chord. Moved off it,
+        # the default would come back there unasked; keep it off, as moving
+        # a default does.
+        new_text = _insert(backend, new_text, backend.render(old_chord, "Disable"))
+
+    def took(parsed: list[Shortcut]) -> bool:
+        if not any(s.chord == new_chord for s in parsed):
+            return False
+        return not shield or any(
+            s.chord == old_chord and s.action.startswith("Disable") for s in parsed
+        )
+
+    return _commit(backend, path, new_text, operation, took, new_chord)
 
 
 def _require_live_default(backend: Backend, shortcut: Shortcut) -> None:

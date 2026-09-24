@@ -559,6 +559,27 @@ class TestCosmicOverrides:
         assert cosmic_rw._custom.read_text().count("Disable") == disables
         assert by_chord(cosmic_rw.read())["super+return"].action == 'Spawn("foot")'
 
+    def test_moving_an_override_keeps_the_shadowed_default_off(self, cosmic_rw):
+        """The fixture's custom Super+T (alacritty) overrides the default
+        ToggleTiling. Moving it must not bring ToggleTiling back on Super+T."""
+        override = by_chord(cosmic_rw.read())["super+t"]
+        assert not override.extras["readonly"]
+        editor.rebind(cosmic_rw, override, Chord.parse("Super+Shift+Return"))
+        after = by_chord(cosmic_rw.read())
+        assert after["super+shift+return"].action == 'Spawn("alacritty")'
+        assert "super+t" not in after
+        assert '(modifiers: [Super], key: "t"): Disable,' in cosmic_rw._custom.read_text()
+
+    def test_moving_a_plain_custom_binding_disables_nothing(self, cosmic_rw):
+        custom = cosmic_rw._custom
+        custom.write_text(
+            custom.read_text().replace(
+                "}", '    (modifiers: [Super], key: "y"): Spawn("foot"),\n}'
+            )
+        )
+        editor.rebind(cosmic_rw, by_chord(cosmic_rw.read())["super+y"], Chord.parse("Super+U"))
+        assert 'key: "y"): Disable' not in custom.read_text()
+
     def test_a_stale_default_is_not_overridden(self, cosmic_rw):
         """A custom binding put on the default's chord since it was read
         would lose to the Disable appended after it."""

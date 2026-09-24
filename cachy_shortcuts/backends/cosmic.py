@@ -74,13 +74,22 @@ class CosmicBackend(Backend):
             except (OSError, UnicodeDecodeError):
                 continue
             for shortcut in self.parse(text, path):
-                if shortcut.extras.get("action_value", "").strip().startswith(
-                    ("Disable", "Disabled")
-                ):
+                if _is_disable(shortcut.extras.get("action_value", "")):
                     merged.pop(shortcut.chord.canonical, None)
                     continue
                 merged[shortcut.chord.canonical] = shortcut
         return list(merged.values())
+
+    def default_at(self, chord: Chord) -> Shortcut | None:
+        """The system default bound to ``chord``, live or overridden."""
+        try:
+            text = self._defaults.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        found = [s for s in self.parse(text, self._defaults) if s.chord == chord]
+        if not found or _is_disable(found[-1].action):
+            return None
+        return found[-1]
 
     def parse(self, text: str, path: Path) -> list[Shortcut]:
         sc = Scanner(text)
@@ -241,6 +250,10 @@ class CosmicBackend(Backend):
     def reload(self) -> None:
         # cosmic-settings-daemon watches the config; nothing to trigger.
         return None
+
+
+def _is_disable(action: str) -> bool:
+    return action.strip().startswith(("Disable", "Disabled"))
 
 
 def _escape(value: str) -> str:
