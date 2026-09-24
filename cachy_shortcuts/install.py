@@ -60,6 +60,11 @@ def install_hotkey(chord_text: str | None = None, dry_run: bool = False) -> int:
 
     failures = 0
     for backend in backends:
+        reason = backend.unsupported()
+        if reason:
+            print(f"{backend.display_name}: skipped - {reason}")
+            failures += 1
+            continue
         existing = backend.read()
 
         # Already installed? Leave it alone and report where it is.

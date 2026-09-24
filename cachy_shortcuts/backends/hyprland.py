@@ -177,26 +177,64 @@ class HyprlandBackend(Backend):
     display_name = "Hyprland"
 
     def __init__(self, config_root: Path | None = None) -> None:
+        # HYPRLAND_CONFIG only applies to the default location: a caller that
+        # names a root (the tests, a second machine's tree) means that root.
+        self._honour_env = config_root is None
         self._root = config_root or (
             Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hypr"
         )
 
     # --- discovery ---------------------------------------------------------
 
-    def config_paths(self) -> list[Path]:
+    def main_config(self) -> Path:
+        """The file Hyprland loads, found the way Hyprland finds it.
+
+        An explicit HYPRLAND_CONFIG, then hyprland.lua, then hyprland.conf
+        (Jeremy.cpp getCfgPath, v0.56.2). Since 0.55 a hyprland.lua wins
+        over a hyprland.conf beside it, and the .conf is then ignored.
+        """
+        if self._honour_env:
+            explicit = os.environ.get("HYPRLAND_CONFIG")
+            if explicit:
+                return Path(os.path.expanduser(explicit))
+        lua = self._root / "hyprland.lua"
+        if lua.exists():
+            return lua
         main = self._root / "hyprland.conf"
         if not main.exists():
             fallback = Path("/etc/hypr/hyprland.conf")
             main = fallback if fallback.exists() else main
+        return main
+
+    def lua_config(self) -> Path | None:
+        """The Lua config Hyprland is running, if that is what it loads."""
+        main = self.main_config()
+        return main if main.suffix == ".lua" else None
+
+    def unsupported(self) -> str | None:
+        lua = self.lua_config()
+        if lua is None:
+            return None
+        return (
+            f"Hyprland loads {lua}, a Lua config; cachy-shortcuts only reads and "
+            "writes the hyprland.conf grammar, so it leaves Hyprland's bindings "
+            "alone (any hyprland.conf beside it is ignored by Hyprland)"
+        )
+
+    def config_paths(self) -> list[Path]:
+        # Reading a .conf that Hyprland ignores would list binds that do
+        # nothing, and writing to it would report a success that isn't one.
+        if self.lua_config() is not None:
+            return []
         out: list[Path] = []
-        self._collect(main, out, set())
+        self._collect(self.main_config(), out, set())
         return out
 
     def is_installed(self) -> bool:
         # The binary ships as ``Hyprland``; some builds add a lowercase alias.
         if shutil.which("Hyprland") or shutil.which("hyprland"):
             return True
-        return any(p.exists() for p in self.config_paths())
+        return self.main_config().exists()
 
     def _collect(self, path: Path, out: list[Path], visited: set[Path]) -> None:
         try:
@@ -559,6 +597,8 @@ class HyprlandBackend(Backend):
         can't be read, the current one is the safer guess, since that is what
         a machine installing this today is most likely running.
         """
+        if self.lua_config() is not None:
+            return None  # see unsupported(): nothing here writes Lua
         pattern = f"^({'|'.join(escape_regex(app_id) for app_id in APP_IDS)})$"
         version = self.version()
         if version is None or version >= _WINDOWRULE_REGRAMMAR:
@@ -574,10 +614,11 @@ class HyprlandBackend(Backend):
                 f"{keyword} = {prop}, class:{pattern}" for prop in ("float", "noblur")
             )
         body = f"# {RULE_MARKER}: keep the keybinding overlay out of the layout\n{rules}"
-        paths = self.config_paths()
-        target = paths[0] if paths else (self._root / "hyprland.conf")
         return FloatRule(
-            backend=self.name, path=target, body=body, marker=f"# {RULE_MARKER}:"
+            backend=self.name,
+            path=self.main_config(),
+            body=body,
+            marker=f"# {RULE_MARKER}:",
         )
 
     # --- runtime -----------------------------------------------------------

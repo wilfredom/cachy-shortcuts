@@ -30,6 +30,12 @@ def hyprland_vanilla():
 
 
 @pytest.fixture
+def hyprland_lua():
+    """Hyprland 0.55+ running hyprland.lua, with a stale hyprland.conf beside it."""
+    return HyprlandBackend(config_root=FIXTURES / "hyprland-lua")
+
+
+@pytest.fixture
 def mango():
     return MangoBackend(config_root=FIXTURES / "mango")
 

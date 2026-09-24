@@ -106,6 +106,15 @@ class Backend(ABC):
         Ordered so that the file a new binding should be added to comes first.
         """
 
+    def unsupported(self) -> str | None:
+        """Why this compositor's config can't be read or written, or None.
+
+        Set when the config the compositor actually loads is in a form this
+        tool doesn't understand. The editor refuses every write while it is
+        set, and ``doctor`` prints it.
+        """
+        return None
+
     def is_installed(self) -> bool:
         """Whether this compositor appears to exist on the system at all."""
         return bool(shutil.which(self.name)) or any(

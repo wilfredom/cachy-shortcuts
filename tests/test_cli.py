@@ -152,6 +152,13 @@ class TestDoctor:
         cli.main(["doctor"])
         assert "active session : niri" in capsys.readouterr().out
 
+    def test_says_a_hyprland_lua_config_is_not_supported(self, env, capsys):
+        (env / "hypr" / "hyprland.lua").write_text('require("config.binds")\n')
+        cli.main(["doctor"])
+        out = capsys.readouterr().out
+        assert "not supported" in out
+        assert str(env / "hypr" / "hyprland.lua") in out
+
     def test_exit_code_flags_conflicts(self, env, capsys):
         conf = env / "mango" / "config.conf"
         conf.write_text(conf.read_text() + "\nbind=SUPER,Return,spawn,kitty\n")
@@ -287,6 +294,13 @@ class TestInstallHotkey:
         backend = NiriBackend(config_root=env / "niri")
         mine = next(s for s in backend.read() if s.owner == "cachy-shortcuts")
         assert mine.chord != Chord.parse("Mod+Shift+Slash")
+
+    def test_a_hyprland_lua_config_is_skipped_with_the_reason(self, env, capsys):
+        (env / "hypr" / "hyprland.lua").write_text('require("config.binds")\n')
+        before = (env / "hypr" / "hyprland.conf").read_text()
+        assert cli.main(["install-hotkey"]) == 1
+        assert "Hyprland: skipped" in capsys.readouterr().out
+        assert (env / "hypr" / "hyprland.conf").read_text() == before
 
     def test_is_idempotent(self, env, capsys):
         cli.main(["install-hotkey"])

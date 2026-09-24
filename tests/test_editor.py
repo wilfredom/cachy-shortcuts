@@ -423,6 +423,31 @@ class TestMangoSystemConfig:
         assert backup.list_snapshots() == []
 
 
+class TestHyprlandLuaRefusal:
+    @pytest.fixture
+    def lua_rw(self, tmp_path):
+        root = tmp_path / "hypr"
+        shutil.copytree(FIXTURES / "hyprland-lua", root)
+        return HyprlandBackend(config_root=root)
+
+    def test_add_is_refused_naming_the_lua_file(self, lua_rw):
+        """Writing the .conf Hyprland ignores would report a success that
+        does nothing."""
+        conf = lua_rw._root / "hyprland.conf"
+        before = conf.read_text()
+        with pytest.raises(editor.EditError, match="hyprland.lua"):
+            editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        assert conf.read_text() == before
+        assert backup.list_snapshots() == []
+
+    def test_an_edit_of_a_stale_record_is_refused(self, lua_rw):
+        """A shortcut read before the Lua config appeared must not be written."""
+        conf = lua_rw._root / "hyprland.conf"
+        stale = lua_rw.parse(conf.read_text(), conf)[0]
+        with pytest.raises(editor.EditError, match="Lua"):
+            editor.delete(lua_rw, stale)
+
+
 class TestCosmicOverrides:
     def test_editing_a_default_writes_an_override_to_custom(self, cosmic_rw):
         target = by_chord(cosmic_rw.read())["super+q"]

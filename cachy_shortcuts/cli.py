@@ -71,6 +71,10 @@ def _die(message: str, code: int = 1) -> None:
 
 def cmd_list(args) -> int:
     backends = _resolve_backends(args)
+    for backend in backends:
+        reason = backend.unsupported()
+        if reason:
+            print(f"warning: {reason}", file=sys.stderr)
     collected: list[tuple[Backend, list[Shortcut]]] = [(b, b.read()) for b in backends]
 
     if args.json:
@@ -131,6 +135,10 @@ def cmd_doctor(args) -> int:
     total_conflicts = 0
     for backend in detect.detect_all():
         print(_c(f"\n  {backend.display_name}", BOLD))
+        reason = backend.unsupported()
+        if reason:
+            print(f"    {_c('not supported:', WARN)} {reason}")
+            continue
         paths = backend.config_paths()
         existing = [p for p in paths if p.exists()]
         if not existing:

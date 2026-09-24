@@ -39,6 +39,9 @@ def _read(path: Path) -> str:
 
 
 def status_for(backend: Backend) -> RuleStatus:
+    reason = backend.unsupported()
+    if reason:
+        return RuleStatus(backend, None, False, reason)
     rule = backend.float_rule()
     if rule is None:
         return RuleStatus(backend, None, False, "no tiling exception needed")

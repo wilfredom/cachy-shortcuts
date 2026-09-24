@@ -45,6 +45,9 @@ def _target_file(backend: Backend, shortcut: Shortcut | None) -> Path:
     read-only, so an edit to a default binding becomes an override written into
     the user's ``custom`` file instead.
     """
+    reason = backend.unsupported()
+    if reason:
+        raise EditError(reason)
     if isinstance(backend, CosmicBackend):
         return backend.write_target()
     if shortcut is not None and shortcut.source is not None:

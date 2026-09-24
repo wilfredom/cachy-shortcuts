@@ -278,6 +278,50 @@ class TestHyprlandReader:
             assert shell[canonical].chord == bare[canonical].chord
 
 
+class TestHyprlandLuaConfig:
+    """Hyprland 0.55+ loads hyprland.lua over hyprland.conf. The Lua config is
+    not readable here, so the ignored .conf must not stand in for it."""
+
+    def test_the_lua_file_is_what_hyprland_loads(self, hyprland_lua):
+        assert hyprland_lua.main_config().name == "hyprland.lua"
+        assert hyprland_lua.lua_config() == hyprland_lua.main_config()
+
+    def test_the_ignored_conf_is_not_read(self, hyprland_lua):
+        assert hyprland_lua.config_paths() == []
+        assert hyprland_lua.read() == []
+
+    def test_the_reason_names_the_lua_file(self, hyprland_lua):
+        assert "hyprland.lua" in hyprland_lua.unsupported()
+
+    def test_no_float_rule_is_offered(self, hyprland_lua):
+        assert hyprland_lua.float_rule() is None
+
+    def test_a_conf_only_config_is_unaffected(self, hyprland):
+        assert hyprland.unsupported() is None
+        assert hyprland.main_config().name == "hyprland.conf"
+
+    def test_hyprland_config_env_is_honoured(self, tmp_path, monkeypatch):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        explicit = tmp_path / "elsewhere" / "main.conf"
+        explicit.parent.mkdir()
+        explicit.write_text("bind = SUPER, Q, killactive,\n")
+        monkeypatch.setenv("HYPRLAND_CONFIG", str(explicit))
+        backend = HyprlandBackend()
+        assert backend.config_paths() == [explicit]
+        assert "super+q" in by_chord(backend.read())
+
+    def test_hyprland_config_env_pointing_at_lua_is_unsupported(
+        self, tmp_path, monkeypatch
+    ):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        monkeypatch.setenv("HYPRLAND_CONFIG", str(tmp_path / "main.lua"))
+        assert "main.lua" in HyprlandBackend().unsupported()
+
+
 class TestCosmicReader:
     def test_reads_defaults(self, cosmic):
         found = by_chord(cosmic.read())
