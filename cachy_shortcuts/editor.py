@@ -64,6 +64,12 @@ def _read(path: Path) -> str:
         raise EditError(f"cannot read {path}: {exc}") from exc
 
 
+def _insert(backend: Backend, text: str, rendered: str) -> str:
+    """``text`` with a new binding placed where the backend wants it."""
+    offset, prefix, suffix = backend.insertion_point(text)
+    return text[:offset] + prefix + rendered + suffix + text[offset:]
+
+
 def _commit(
     backend: Backend,
     path: Path,
@@ -133,9 +139,7 @@ def add(
 ) -> EditResult:
     path = _target_file(backend, None)
     text = _read(path)
-    offset, prefix, suffix = backend.insertion_point(text)
-    rendered = backend.render(chord, action, description)
-    new_text = text[:offset] + prefix + rendered + suffix + text[offset:]
+    new_text = _insert(backend, text, backend.render(chord, action, description))
     return _commit(
         backend,
         path,
@@ -282,15 +286,26 @@ def _replace(
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
         text = _read(path)
-        offset, prefix, suffix = backend.insertion_point(text)
-        new_text = text[:offset] + prefix + rendered + suffix + text[offset:]
+        old_chord = shortcut.chord
+        released = new_chord != old_chord
+        new_text = text
+        if released:
+            # COSMIC merges custom over defaults chord by chord, so an override
+            # at a new chord leaves the default live at the old one as well.
+            # Disable it in the same write, as COSMIC Settings does.
+            new_text = _insert(backend, new_text, backend.render(old_chord, "Disable"))
+        new_text = _insert(backend, new_text, rendered)
+
+        def took(parsed: list[Shortcut]) -> bool:
+            if not any(s.chord == new_chord for s in parsed):
+                return False
+            return not released or any(
+                s.chord == old_chord and s.action.startswith("Disable")
+                for s in parsed
+            )
+
         return _commit(
-            backend,
-            path,
-            new_text,
-            f"{operation} (override)",
-            lambda parsed: any(s.chord == new_chord for s in parsed),
-            new_chord,
+            backend, path, new_text, f"{operation} (override)", took, new_chord
         )
 
     path = shortcut.source.path
@@ -318,9 +333,7 @@ def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
     if shortcut.extras.get("readonly"):
         path = _target_file(backend, None)
         text = _read(path)
-        offset, prefix, suffix = backend.insertion_point(text)
-        rendered = backend.render(shortcut.chord, "Disable")
-        new_text = text[:offset] + prefix + rendered + suffix + text[offset:]
+        new_text = _insert(backend, text, backend.render(shortcut.chord, "Disable"))
         return _commit(
             backend,
             path,

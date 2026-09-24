@@ -331,6 +331,22 @@ class TestCosmicOverrides:
         assert cosmic_rw._defaults.read_text() == system_before
         assert "super+shift+q" in by_chord(cosmic_rw.read())
 
+    def test_moving_a_default_to_a_new_chord_releases_the_old_one(self, cosmic_rw):
+        """Otherwise both chords close windows: COSMIC keeps the default live
+        at Super+Q beside the override at Super+Shift+Q."""
+        target = by_chord(cosmic_rw.read())["super+q"]
+        editor.rebind(cosmic_rw, target, Chord.parse("Super+Shift+Q"))
+        after = by_chord(cosmic_rw.read())
+        assert "super+q" not in after
+        assert after["super+shift+q"].action == "Close"
+
+    def test_retargeting_a_default_in_place_disables_nothing(self, cosmic_rw):
+        disables = cosmic_rw._custom.read_text().count("Disable")
+        target = by_chord(cosmic_rw.read())["super+return"]
+        editor.retarget(cosmic_rw, target, "foot")
+        assert cosmic_rw._custom.read_text().count("Disable") == disables
+        assert by_chord(cosmic_rw.read())["super+return"].action == 'Spawn("foot")'
+
     def test_deleting_a_default_records_a_disable(self, cosmic_rw):
         target = by_chord(cosmic_rw.read())["super+escape"]
         editor.delete(cosmic_rw, target)
