@@ -257,6 +257,17 @@ class TestHyprlandReader:
         found = by_chord(hyprland.read())
         assert found["super+space"].owner == "Noctalia"
 
+    def test_noctalia_5_msg_cli_is_attributed(self):
+        # Noctalia 5.1 and the CachyOS hypr-noctalia profile call
+        # `noctalia msg ...` rather than going through quickshell.
+        from cachy_shortcuts.model import Shortcut
+
+        bind = Shortcut(
+            chord=Chord.parse("Super+Space"),
+            action="exec noctalia msg panel-toggle launcher",
+        )
+        assert bind.owner == "Noctalia"
+
     def test_a_config_without_a_shell_still_reads(self, hyprland_vanilla):
         found = by_chord(hyprland_vanilla.read())
         assert found["super+return"].action == "exec kitty"

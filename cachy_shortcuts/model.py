@@ -110,7 +110,13 @@ class Shortcut:
         just reporting a collision.
         """
         act = self.action.lower()
-        if "noctalia-shell" in act or "qs -c noctalia" in act:
+        # Noctalia 5 has its own CLI, `noctalia msg ...`; the CachyOS
+        # hypr-noctalia profile binds through it (binds.lua: noctCall).
+        if (
+            "noctalia-shell" in act
+            or "qs -c noctalia" in act
+            or re.search(r"\bnoctalia\s+msg\b", act)
+        ):
             return "Noctalia"
         if re.search(r"\bdms\b\s+ipc", act) or "dankmaterialshell" in act:
             return "DMS"
