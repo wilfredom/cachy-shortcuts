@@ -250,8 +250,9 @@ def cmd_add(args) -> int:
         _die(f"bad chord {args.chord!r}: {exc}")
 
     existing = backend.read()
-    claim = conflicts.describe_claimant(chord, existing)
-    if claim and not args.force:
+    victim = conflicts.claimant(chord, existing)
+    if victim is not None and not args.force:
+        claim = conflicts.describe_claimant(chord, existing)
         _die(f"{chord.display()} is {claim}. Use --force to take it anyway.")
 
     command = args.command
@@ -265,9 +266,19 @@ def cmd_add(args) -> int:
 
     action = editor.wrap_command_as_action(backend, command)
     try:
-        result = editor.add(backend, chord, action, args.description or "")
+        if victim is None:
+            result = editor.add(backend, chord, action, args.description or "")
+        else:
+            # Taking a chord means unbinding what holds it, not binding it a
+            # second time: mango would keep running the old bind, Hyprland
+            # would run both.
+            result = editor.take_over(
+                backend, victim, None, chord, action, args.description or ""
+            )
     except editor.EditError as exc:
         _die(str(exc))
+    for gone in [victim, *result.also_removed] if victim is not None else []:
+        print(f"{_c('unbound', WARN)} {chord.display()} ({gone.label})")
     print(f"{_c('added', ACCENT)} {chord.display()} → {command}")
     print(_c(f"  {result.path}", DIM))
     print(_c("  undo with: cachy-shortcuts undo", DIM))
@@ -292,6 +303,12 @@ def cmd_rm(args) -> int:
         _die(str(exc))
     print(f"{_c('removed', ACCENT)} {chord.display()} ({target.label})")
     print(_c(f"  {result.path}", DIM))
+    # A duplicate that the removed bind was hiding (mango runs only the first
+    # match) or running alongside (Hyprland runs every match) now fires.
+    left = conflicts.claimant(chord, backend.read())
+    if left is not None:
+        where = f" at {left.source.location}" if left.source else ""
+        print(_c(f"  {chord.display()} is still bound: {left.label}{where}", WARN))
     print(_c("  undo with: cachy-shortcuts undo", DIM))
     return 0
 

@@ -49,6 +49,34 @@ def _code(line: str) -> str:
     return line
 
 
+def _mark_shadowed(binds: list[Shortcut]) -> None:
+    """Tag each bind that never fires because an earlier one wins.
+
+    keyboard.c keybinding() walks the binds in load order and stops at the
+    first match, unless that bind has the ``c`` flag. A later bind on the
+    same keys is dead wherever the earlier one applies: the same keymode, or
+    any keymode when the earlier one is ``common``. A press bind and a
+    release bind (``r``) never compete, and a lock bind (``l``) still fires
+    on the lock screen behind one that doesn't.
+    """
+    earlier: dict[str, list[Shortcut]] = {}
+    for bind in binds:
+        seen = earlier.setdefault(bind.chord.canonical, [])
+        for first in seen:
+            if _shadows(first, bind):
+                bind.extras["shadowed_by"] = f"`{first.raw}` at {first.source.location}"
+                break
+        seen.append(bind)
+
+
+def _shadows(first: Shortcut, later: Shortcut) -> bool:
+    a, b = first.extras.get("flags", ""), later.extras.get("flags", "")
+    if "c" in a or ("r" in a) != ("r" in b) or ("l" in b and "l" not in a):
+        return False
+    mode = first.extras.get("keymode")
+    return mode == later.extras.get("keymode") or mode == "common"
+
+
 def _sourced(stripped: str, base: Path) -> Path | None:
     """The file a ``source`` / ``source-optional`` line names, if it is one."""
     m = _SOURCE_RE.match(stripped)
@@ -193,6 +221,7 @@ class MangoBackend(Backend):
             return self._walk(text, path, out, mode, visit)
 
         visit(paths[0], "default")
+        _mark_shadowed(out)
         return out
 
     def _walk(self, text: str, path: Path, out: list[Shortcut], mode: str, visit) -> str:

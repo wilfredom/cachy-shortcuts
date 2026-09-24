@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import backup
@@ -33,6 +33,8 @@ class EditResult:
     path: Path
     snapshot: backup.Snapshot
     chord: Chord | None = None
+    # take_over: other bindings on the chord it removed besides the victim.
+    also_removed: list[Shortcut] = field(default_factory=list)
 
     def describe(self) -> str:
         target = self.chord.display() if self.chord else ""
@@ -102,7 +104,16 @@ def _commit(
     operation: str,
     validate,
     chord: Chord | None,
+    live: tuple[str, bool] | None = None,
 ) -> EditResult:
+    """Snapshot, write, validate, and roll back if the edit didn't take.
+
+    ``validate`` checks the file just written. ``live`` -- the rendered
+    binding, and whether it must be global -- also checks the config as the
+    compositor loads it: a binding can be in its file and still never fire,
+    removed by a later Hyprland ``unbind`` or beaten by an earlier mango bind
+    on the same keys.
+    """
     snapshot = backup.create([path], reason=operation)
     _write(snapshot, path, new_text)
     try:
@@ -113,9 +124,58 @@ def _commit(
     if not validate(reparsed):
         _rollback(snapshot)
         raise EditError(f"{operation} did not take effect, rolled back")
+    if live is not None and chord is not None:
+        why = _why_not_live(backend, path, chord, *live)
+        if why:
+            _rollback(snapshot)
+            raise EditError(
+                f"{operation} rolled back: {chord.display()} would not fire, "
+                f"because {why}"
+            )
     backend.reload()
     backup.prune()
     return EditResult(operation=operation, path=path, snapshot=snapshot, chord=chord)
+
+
+def _why_dead(shortcut: Shortcut) -> str | None:
+    """Why a binding the compositor loads never fires, or None if it does."""
+    if shortcut.extras.get("disabled"):
+        return f"{shortcut.extras.get('disabled_by') or 'a later unbind'} removes it"
+    if shortcut.extras.get("shadowed_by"):
+        return (
+            "an earlier bind on the same keys runs instead: "
+            f"{shortcut.extras['shadowed_by']}"
+        )
+    return None
+
+
+def _why_not_live(
+    backend: Backend, path: Path, chord: Chord, rendered: str, global_only: bool
+) -> str | None:
+    """Why the binding just written to ``path`` would not fire, if it wouldn't.
+
+    Found in ``read()`` by its text; failing that, by its chord in that file.
+    A binding ``read()`` doesn't list at all is left to the file check.
+    """
+    shortcuts = backend.read()
+    mine = [s for s in shortcuts if s.chord == chord and s.raw == rendered.strip()]
+    if not mine:
+        mine = [
+            s
+            for s in shortcuts
+            if s.chord == chord
+            and s.source is not None
+            and backend.write_path(s.source.path) == path
+        ]
+    reasons: list[str] = []
+    for shortcut in mine:
+        why = _why_dead(shortcut)
+        if why is None and global_only and shortcut.extras.get("submap"):
+            why = f"it lands inside the {shortcut.extras['submap']!r} mode"
+        if why is None:
+            return None
+        reasons.append(why)
+    return reasons[0] if reasons else None
 
 
 def write_file(
@@ -164,7 +224,8 @@ def add(
 ) -> EditResult:
     path = _target_file(backend, None)
     text = read_for_edit(backend, path)
-    new_text = _insert(backend, text, backend.render(chord, action, description))
+    rendered = backend.render(chord, action, description)
+    new_text = _insert(backend, text, rendered)
     return _commit(
         backend,
         path,
@@ -172,6 +233,7 @@ def add(
         "add",
         lambda parsed: any(s.chord == chord for s in parsed),
         chord,
+        live=(rendered, True),
     )
 
 
@@ -263,6 +325,19 @@ def take_over(
         backup.discard(combined)  # nothing changed; undo keeps its last edit
         raise
     backup.absorb(combined, removed.snapshot)
+    # Every other binding on the chord in the victim's scope goes too. In
+    # Hyprland they would all fire alongside the new one; in mango the first
+    # one left would fire instead of it (keyboard.c stops at the first match).
+    also_removed: list[Shortcut] = []
+    tried: set[tuple[Path, str]] = set()
+    while True:
+        other = _rival(backend, victim, target, tried)
+        if other is None:
+            break
+        tried.add((backend.write_path(other.source.path), other.raw))
+        extra = delete(backend, other)
+        backup.absorb(combined, extra.snapshot)
+        also_removed.append(other)
     if target is None:
         result = add(backend, chord, action, description)
     else:
@@ -272,7 +347,36 @@ def take_over(
         )
     backup.absorb(combined, result.snapshot)
     result.snapshot = combined
+    result.also_removed = also_removed
     return result
+
+
+def _rival(
+    backend: Backend,
+    victim: Shortcut,
+    target: Shortcut | None,
+    tried: set[tuple[Path, str]],
+) -> Shortcut | None:
+    """Another binding still on the victim's chord, in the victim's scope.
+
+    Unbound ones are already gone, and read-only defaults (COSMIC) lose to
+    the user's file whatever it binds, so neither needs removing.
+    """
+    scope = victim.extras.get("submap") or ""
+    avoid = set(tried)
+    if target is not None and target.source is not None:
+        avoid.add((backend.write_path(target.source.path), target.raw))
+    for shortcut in backend.read():
+        if (
+            shortcut.chord == victim.chord
+            and (shortcut.extras.get("submap") or "") == scope
+            and shortcut.source is not None
+            and not shortcut.extras.get("disabled")
+            and not shortcut.extras.get("readonly")
+            and (backend.write_path(shortcut.source.path), shortcut.raw) not in avoid
+        ):
+            return shortcut
+    return None
 
 
 def _relocate(backend: Backend, shortcut: Shortcut) -> Shortcut:
@@ -342,7 +446,13 @@ def _replace(
             )
 
         return _commit(
-            backend, path, new_text, f"{operation} (override)", took, new_chord
+            backend,
+            path,
+            new_text,
+            f"{operation} (override)",
+            took,
+            new_chord,
+            live=(rendered, False),
         )
 
     path = _target_file(backend, shortcut)
@@ -372,7 +482,10 @@ def _replace(
             s.chord == old_chord and s.action.startswith("Disable") for s in parsed
         )
 
-    return _commit(backend, path, new_text, operation, took, new_chord)
+    # A binding that fired before must still fire after; one that was already
+    # dead (unbound, shadowed) can be edited as it is.
+    live = (rendered, False) if _why_dead(shortcut) is None else None
+    return _commit(backend, path, new_text, operation, took, new_chord, live=live)
 
 
 def _require_live_default(backend: Backend, shortcut: Shortcut) -> None:

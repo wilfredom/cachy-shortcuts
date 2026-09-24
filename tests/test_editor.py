@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from cachy_shortcuts import backup, editor
+from cachy_shortcuts import backup, conflicts, editor
 from cachy_shortcuts.backends import (
     CosmicBackend,
     HyprlandBackend,
@@ -958,6 +958,62 @@ class TestTakeOver:
 
         editor.undo_last()
         assert {p: p.read_text() for p in files} == files
+
+    def test_taking_a_mango_chord_bound_twice_removes_both(self, mango_rw):
+        """mango runs only the first bind on a chord (keyboard.c). Will's
+        lap2 config binds SUPER+ALT,Left to focusmon and then tagmon: taking
+        the chord from focusmon alone left tagmon firing and the new bind
+        dead."""
+        path = mango_rw.config_paths()[0]
+        before = path.read_text()
+        path.write_text(
+            before.replace(
+                "bind=SUPER,b,",
+                "bind = SUPER+ALT, Left, focusmon, left\n"
+                "bind = SUPER+ALT, Left, tagmon, left\n"
+                "bind=SUPER,b,",
+                1,
+            )
+        )
+        written = path.read_text()
+        chord = Chord.parse("Super+Alt+Left")
+        shortcuts = mango_rw.read()
+        victim = conflicts.claimant(chord, shortcuts)
+        assert victim.extras["command"] == "focusmon"
+        tagmon = next(s for s in shortcuts if s.chord == chord and s is not victim)
+        assert "focusmon" in tagmon.extras["shadowed_by"]
+
+        result = editor.take_over(mango_rw, victim, None, chord, "spawn foot")
+        on_chord = [s for s in mango_rw.read() if s.chord == chord]
+        assert [s.action for s in on_chord] == ["spawn foot"]
+        assert [s.extras["command"] for s in result.also_removed] == ["tagmon"]
+        editor.undo_last()
+        assert path.read_text() == written
+
+    def test_a_mango_add_behind_an_earlier_bind_is_refused(self, mango_rw):
+        """Written after an existing bind on the same keys, it would never
+        run; the write rolls back and says which bind wins."""
+        path = mango_rw.config_paths()[0]
+        before = path.read_text()
+        with pytest.raises(editor.EditError, match="earlier bind on the same keys"):
+            editor.add(mango_rw, Chord.parse("Super+B"), "spawn chromium")
+        assert path.read_text() == before
+        assert backup.list_snapshots() == []
+
+    def test_taking_a_hyprland_chord_removes_every_global_bind_on_it(self, hypr_rw):
+        """Hyprland runs every bind on a chord, so a second one left behind
+        would fire alongside the new one. A submap's copy stays."""
+        path = hypr_rw.config_paths()[0]
+        path.write_text(path.read_text() + "bind = SUPER, Q, exec, notify-send bye\n")
+        chord = Chord.parse("Super+Q")
+        victim = conflicts.claimant(chord, hypr_rw.read())
+        editor.take_over(hypr_rw, victim, None, chord, "exec foot")
+        left = [
+            (s.action, s.extras["submap"])
+            for s in hypr_rw.read()
+            if s.chord == chord and not s.extras.get("disabled")
+        ]
+        assert sorted(left) == [("exec foot", ""), ("submap reset", "resize")]
 
     def test_the_live_target_is_moved_not_an_unbound_copy(self, tmp_path):
         """Hyprland's override idiom leaves an unbound copy of the target in

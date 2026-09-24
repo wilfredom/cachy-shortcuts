@@ -358,7 +358,12 @@ class HyprlandBackend(Backend):
 
             unbind = _UNBIND_RE.match(stripped)
             if unbind:
-                _apply_unbind(out, unbind.group("rest"), variables)
+                _apply_unbind(
+                    out,
+                    unbind.group("rest"),
+                    variables,
+                    f"`{stripped}` at {path}:{lineno}",
+                )
                 offset += len(line)
                 continue
 
@@ -685,7 +690,9 @@ def _code(line: str) -> str:
     return line
 
 
-def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str]) -> None:
+def _apply_unbind(
+    earlier: list[Shortcut], rest: str, variables: dict[str, str], where: str = ""
+) -> None:
     """Disable what an ``unbind =`` line removes from the binds before it.
 
     ``all`` clears every bind; otherwise every bind on the chord goes, in any
@@ -716,7 +723,9 @@ def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str])
             == wanted
         ]
     for shortcut in targets:
-        shortcut.extras["disabled"] = True
+        if not shortcut.extras.get("disabled"):
+            shortcut.extras["disabled"] = True
+            shortcut.extras["disabled_by"] = where
 
 
 # stringToModMask (KeybindManager.cpp, v0.56.2): each bit is set when any of

@@ -95,6 +95,27 @@ class TestMutatingCommands:
     def test_force_takes_a_claimed_chord(self, env):
         assert cli.main(["add", "Super+B", "chromium", "--backend", "niri", "--force"]) == 0
 
+    def test_force_unbinds_the_holder_instead_of_binding_twice(self, env, capsys):
+        """mango runs the first bind on a chord, so a second Super+B added
+        after the first would never fire."""
+        assert cli.main(["add", "Super+B", "chromium", "--backend", "mango", "--force"]) == 0
+        from cachy_shortcuts.backends import MangoBackend
+
+        backend = MangoBackend(config_root=env / "mango", system_config=env / "none")
+        on_b = [s.action for s in backend.read() if s.chord == Chord.parse("Super+B")]
+        assert on_b == ["spawn chromium"]
+        assert "unbound" in capsys.readouterr().out
+
+    def test_rm_says_when_a_duplicate_still_holds_the_chord(self, env, capsys):
+        conf = env / "mango" / "config.conf"
+        conf.write_text(
+            conf.read_text().replace(
+                "bind=SUPER,b,", "bind=SUPER,b,spawn,firefox\nbind=SUPER,b,", 1
+            )
+        )
+        assert cli.main(["rm", "Super+B", "--backend", "mango"]) == 0
+        assert "still bound" in capsys.readouterr().out
+
     def test_undo_reverts_the_last_change(self, env):
         path = env / "niri" / "cfg" / "keybinds.kdl"
         before = path.read_text()
