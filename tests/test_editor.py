@@ -836,6 +836,50 @@ class TestSafety:
         assert backup.prune(keep=2) == 3
         assert len(backup.list_snapshots()) == 2
 
+    def test_undo_follows_the_order_of_the_edits_when_the_clock_goes_back(
+        self, mango_rw, monkeypatch
+    ):
+        """At a DST fall-back the second edit gets the earlier wall-clock
+        stamp. Undo must still revert the second edit first."""
+        import datetime as real
+
+        stamps = [
+            real.datetime(2026, 10, 25, 2, 45),  # CEST, before the fall-back
+            real.datetime(2026, 10, 25, 2, 10),  # CET, 25 minutes later
+        ]
+
+        class Clock:
+            @staticmethod
+            def now():
+                return stamps.pop(0)
+
+        monkeypatch.setattr(backup, "datetime", Clock)
+        path = mango_rw.write_target()
+        f0 = path.read_text()
+        editor.retarget(mango_rw, by_chord(mango_rw.read())["super+b"], "spawn chromium")
+        f1 = path.read_text()
+        editor.retarget(mango_rw, by_chord(mango_rw.read())["super+shift+e"], "spawn thunar")
+        editor.undo_last()
+        assert path.read_text() == f1
+        editor.undo_last()
+        assert path.read_text() == f0
+
+    def test_prune_drops_the_oldest_edits_not_the_lowest_stamps(self, niri_rw, monkeypatch):
+        import datetime as real
+
+        stamps = [real.datetime(2026, 10, 25, 2, 45), real.datetime(2026, 10, 25, 2, 10)]
+
+        class Clock:
+            @staticmethod
+            def now():
+                return stamps.pop(0)
+
+        monkeypatch.setattr(backup, "datetime", Clock)
+        backup.create([niri_rw.config_paths()[0]], reason="first")
+        backup.create([niri_rw.config_paths()[0]], reason="second")
+        backup.prune(keep=1)
+        assert [s.reason for s in backup.list_snapshots()] == ["second"]
+
 
 class TestCommandWrapping:
     """wrap_command_as_action is the single place commands get escaped before

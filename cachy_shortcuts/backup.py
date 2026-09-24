@@ -37,6 +37,10 @@ class Snapshot:
     stamp: str
     reason: str
     files: list[Path]
+    # Creation order. The stamp is local wall-clock time, which can go back
+    # (a DST fall-back, a timezone change, a clock correction); undo and
+    # prune need the order the edits were actually made in.
+    seq: int = 0
 
     @property
     def id(self) -> str:
@@ -50,6 +54,7 @@ class Snapshot:
 def create(paths: list[Path], reason: str = "edit") -> Snapshot:
     """Copy ``paths`` into a timestamped snapshot directory."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    seq = max((s.seq for s in list_snapshots()), default=0) + 1
     backup_root().mkdir(parents=True, exist_ok=True)
     # Never share a directory with another snapshot: discarding one would
     # take the other with it. A suffix still sorts after the bare stamp.
@@ -82,13 +87,22 @@ def create(paths: list[Path], reason: str = "edit") -> Snapshot:
         stored.append(path)
         manifest.append({"original": str(path), "stored": dest.name})
     (target / MANIFEST).write_text(
-        json.dumps({"reason": reason, "stamp": stamp, "files": manifest}, indent=2),
+        json.dumps(
+            {"reason": reason, "stamp": stamp, "seq": seq, "files": manifest},
+            indent=2,
+        ),
         encoding="utf-8",
     )
-    return Snapshot(path=target, stamp=stamp, reason=reason, files=stored)
+    return Snapshot(path=target, stamp=stamp, reason=reason, files=stored, seq=seq)
 
 
 def list_snapshots() -> list[Snapshot]:
+    """Every snapshot, newest first.
+
+    Ordered by the sequence number each was created with; a snapshot from
+    before there was one counts as older than any that has one, and those
+    keep the order of their stamps.
+    """
     root = backup_root()
     if not root.is_dir():
         return []
@@ -107,8 +121,11 @@ def list_snapshots() -> list[Snapshot]:
                 stamp=data.get("stamp", entry.name),
                 reason=data.get("reason", "?"),
                 files=[Path(f["original"]) for f in data.get("files", [])],
+                seq=data.get("seq", 0) if isinstance(data.get("seq"), int) else 0,
             )
         )
+    # Stable: equal sequence numbers keep the name order from above.
+    out.sort(key=lambda snapshot: snapshot.seq, reverse=True)
     return out
 
 
