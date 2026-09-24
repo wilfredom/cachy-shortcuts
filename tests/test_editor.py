@@ -776,6 +776,22 @@ class TestSafety:
             editor.undo_last()
         assert path.read_text().endswith("# a hand edit\n")
 
+    def test_an_undo_with_nothing_left_is_not_nothing_to_undo(self, mango_rw, cosmic_rw):
+        """The COSMIC add created custom, then the user deleted it by hand.
+        That undo has nothing left to restore -- which is not the same as
+        there being no history: the mango edit before it is still there."""
+        path = mango_rw.write_target()
+        f0 = path.read_text()
+        editor.retarget(mango_rw, by_chord(mango_rw.read())["super+b"], "spawn chromium")
+        custom = cosmic_rw._custom
+        custom.unlink()
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        custom.unlink()
+        assert editor.undo_last() == []
+        assert editor.undo_last() == [path.resolve()]
+        assert path.read_text() == f0
+        assert editor.undo_last() is None
+
     def test_a_second_undo_walks_further_back(self, mango_rw):
         path = mango_rw.config_paths()[0]
         before = path.read_text()

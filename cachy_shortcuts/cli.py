@@ -318,9 +318,13 @@ def cmd_undo(args) -> int:
         restored = editor.undo_last(force=args.force)
     except backup.UndoRefused as exc:
         _die(str(exc))
-    if not restored:
+    if restored is None:
         print("Nothing to undo.")
         return 1
+    if not restored:
+        # Its files were already back to how they were (deleted by hand, say).
+        print("The last edit had nothing left to undo; run undo again to go further back.")
+        return 0
     print(_c("restored", ACCENT))
     for path in restored:
         print(f"  {path}")

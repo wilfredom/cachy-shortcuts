@@ -565,7 +565,7 @@ def _bindings(parsed: list[Shortcut]) -> Counter:
     return Counter((s.chord.canonical, s.action, s.raw) for s in parsed)
 
 
-def undo_last(force: bool = False) -> list[Path]:
+def undo_last(force: bool = False) -> list[Path] | None:
     """Roll back the most recent write. See ``backup.restore_latest``."""
     return backup.restore_latest(force=force)
 

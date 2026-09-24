@@ -212,8 +212,12 @@ def changed_since(snapshot: Snapshot) -> list[Path]:
     return changed
 
 
-def restore_latest(force: bool = False) -> list[Path]:
+def restore_latest(force: bool = False) -> list[Path] | None:
     """Restore the newest snapshot not already undone, and mark it undone.
+
+    Returns the paths restored: empty when that snapshot had nothing left to
+    restore (its files are already as they were before the edit), and None
+    when there is no snapshot left to undo.
 
     A file changed after the edit raises UndoRefused. ``force`` undoes it
     anyway, after copying the current files into a snapshot of their own
@@ -234,7 +238,7 @@ def restore_latest(force: bool = False) -> list[Path]:
         restored = restore(snapshot)
         mark_undone(snapshot)
         return restored
-    return []
+    return None
 
 
 def mark_undone(snapshot: Snapshot) -> None:

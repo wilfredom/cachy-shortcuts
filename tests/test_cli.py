@@ -145,6 +145,15 @@ class TestMutatingCommands:
         assert cli.main(["undo"]) == 1
         assert "Nothing to undo" in capsys.readouterr().out
 
+    def test_undo_with_nothing_left_says_so(self, env, capsys):
+        custom = env / "cosmic" / "com.system76.CosmicSettings.Shortcuts" / "v1" / "custom"
+        custom.unlink()
+        cli.main(["add", "Super+Y", "foot", "--backend", "cosmic"])
+        custom.unlink()
+        capsys.readouterr()
+        assert cli.main(["undo"]) == 0
+        assert "nothing left to undo" in capsys.readouterr().out
+
     def test_undo_with_nothing_to_undo(self, env, capsys):
         assert cli.main(["undo"]) == 1
         assert "Nothing to undo" in capsys.readouterr().out
