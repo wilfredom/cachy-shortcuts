@@ -658,16 +658,57 @@ def _apply_unbind(earlier: list[Shortcut], rest: str, variables: dict[str, str])
         targets = earlier
     else:
         mods_raw, _, key_raw = value.partition(",")
-        try:
-            chord = Chord.from_parts(
-                split_mods(_expand(mods_raw, variables)),
-                _expand(key_raw.split(",", 1)[0], variables),
-            )
-        except (KeyError, ValueError):
+        if not key_raw.strip():
             return
-        targets = [s for s in earlier if s.chord == chord]
+        # Not Chord equality: removeKeybind compares the modmask and the key
+        # *string* exactly (KeybindManager.cpp:198, v0.56.2), so an unbind
+        # of `t` leaves a bind on `T` in place.
+        wanted = (
+            _modmask(_expand(mods_raw, variables)),
+            _key_identity(_expand(key_raw.split(",", 1)[0], variables)),
+        )
+        targets = [
+            s
+            for s in earlier
+            if (
+                _modmask(_expand(s.extras.get("mods_raw", ""), variables)),
+                _key_identity(_expand(s.extras.get("key_raw", ""), variables)),
+            )
+            == wanted
+        ]
     for shortcut in targets:
         shortcut.extras["disabled"] = True
+
+
+# stringToModMask (KeybindManager.cpp, v0.56.2): each bit is set when any of
+# its names appears anywhere in the field, whatever the case.
+_MODMASK_NAMES: tuple[tuple[str, ...], ...] = (
+    ("SHIFT",),
+    ("CAPS",),
+    ("CTRL", "CONTROL"),
+    ("ALT", "MOD1"),
+    ("MOD2",),
+    ("MOD3",),
+    ("SUPER", "WIN", "LOGO", "MOD4", "META"),
+    ("MOD5",),
+)
+
+
+def _modmask(field: str) -> frozenset[int]:
+    upper = field.upper()
+    return frozenset(
+        bit for bit, names in enumerate(_MODMASK_NAMES) if any(n in upper for n in names)
+    )
+
+
+def _key_identity(key: str) -> tuple:
+    """A key as Hyprland's parseKey stores it: a keycode, or the exact string."""
+    key = key.strip()
+    if key.isdigit() and int(key) > 9:
+        return ("code", int(key))
+    if key.startswith("code:") and key[5:].isdigit():
+        return ("code", int(key[5:]))
+    return ("key", key)
 
 
 def _split_fields(rest: str, described: bool):

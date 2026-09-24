@@ -217,6 +217,30 @@ class TestHyprlandReader:
         parsed = hyprland.parse(text, Path("hyprland.conf"))
         assert [bool(s.extras.get("disabled")) for s in parsed] == [True, False]
 
+    def test_unbind_compares_the_key_string_exactly(self, hyprland):
+        """removeKeybind compares the key string, not the key: an unbind of
+        `t` leaves a bind on `T` live in Hyprland."""
+        text = (
+            "bind = SUPER, T, togglefloating,\n"
+            "bind = SUPER, Q, killactive,\n"
+            "unbind = SUPER, t\n"
+            "unbind = SUPER_SHIFT, Q\n"
+        )
+        parsed = hyprland.parse(text, Path("hyprland.conf"))
+        assert [bool(s.extras.get("disabled")) for s in parsed] == [False, False]
+
+    def test_unbind_matches_the_modmask_and_the_keycode_forms(self, hyprland):
+        """The modmask is a set of bits, however the names are spelt; `code:N`
+        and a bare number above 9 are the same keycode (parseKey)."""
+        text = (
+            "bind = SUPER SHIFT, Q, killactive,\n"
+            "bind = SUPER, code:10, workspace, 1\n"
+            "unbind = SHIFT+WIN, Q\n"
+            "unbind = SUPER, 10\n"
+        )
+        parsed = hyprland.parse(text, Path("hyprland.conf"))
+        assert [bool(s.extras.get("disabled")) for s in parsed] == [True, True]
+
     def test_newer_bind_flags_are_read(self, hyprland):
         """`bindu` (and a, g, x) were skipped by the older flag list."""
         found = by_chord(hyprland.read())
