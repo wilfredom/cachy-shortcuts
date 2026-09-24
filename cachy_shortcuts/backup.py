@@ -167,7 +167,12 @@ def write_atomic(path: Path, text: str) -> None:
     Same-directory temp keeps the rename on one filesystem, so it is atomic and
     the config can never be observed half-written by a compositor that is
     watching the file.
+
+    A symlinked config is written through, as ``restore``'s copy does: the
+    rename lands on the link's target, so the link survives and the dotfile it
+    points at gets the edit.
     """
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:

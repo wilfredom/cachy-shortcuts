@@ -407,6 +407,25 @@ class TestSafety:
         editor.undo_last()
         assert path.read_text() == before
 
+    def test_a_symlinked_config_stays_a_symlink(self, tmp_path):
+        """Written through to the dotfile it points at, as restore does."""
+        dotfiles = tmp_path / "dotfiles"
+        shutil.copytree(FIXTURES / "mango", dotfiles)
+        root = tmp_path / "mango"
+        root.mkdir()
+        for name in ("config.conf", "bind.conf"):
+            (root / name).symlink_to(dotfiles / name)
+        backend = MangoBackend(config_root=root)
+        before = (dotfiles / "config.conf").read_text()
+
+        editor.add(backend, Chord.parse("Super+Y"), "spawn firefox")
+        assert (root / "config.conf").is_symlink()
+        assert "bind=SUPER,y,spawn,firefox" in (dotfiles / "config.conf").read_text()
+
+        editor.undo_last()
+        assert (root / "config.conf").is_symlink()
+        assert (dotfiles / "config.conf").read_text() == before
+
     def test_stale_span_is_refused(self, niri_rw):
         target = by_chord(niri_rw.read())["super+b"]
         # Simulate the file changing underneath us between read and write.
