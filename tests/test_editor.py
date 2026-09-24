@@ -790,6 +790,27 @@ class TestSafety:
         assert (root / "config.conf").is_symlink()
         assert (dotfiles / "config.conf").read_text() == before
 
+    def test_undo_goes_back_to_the_file_the_link_pointed_at(self, tmp_path):
+        """A dotfile profile switch repoints the link between the edit and
+        the undo: the edited profile is reverted, the other left alone."""
+        home = tmp_path / "home" / "niri"
+        home.mkdir(parents=True)
+        profile_a = tmp_path / "dots" / "a" / "config.kdl"
+        profile_b = tmp_path / "dots" / "b" / "config.kdl"
+        profile_a.parent.mkdir(parents=True)
+        profile_b.parent.mkdir(parents=True)
+        profile_a.write_text('binds {\n    Mod+B { spawn "firefox"; }\n}\n')
+        profile_b.write_text('binds {\n    Mod+Z { spawn "profile-b"; }\n}\n')
+        a_before, b_before = profile_a.read_text(), profile_b.read_text()
+        (home / "config.kdl").symlink_to(profile_a)
+        niri = NiriBackend(config_root=home)
+        editor.retarget(niri, by_chord(niri.read())["super+b"], 'spawn "chromium"')
+        (home / "config.kdl").unlink()
+        (home / "config.kdl").symlink_to(profile_b)
+        editor.undo_last()
+        assert profile_a.read_text() == a_before
+        assert profile_b.read_text() == b_before
+
     def test_stale_span_is_refused(self, niri_rw):
         target = by_chord(niri_rw.read())["super+b"]
         # Simulate the file changing underneath us between read and write.

@@ -70,14 +70,16 @@ def create(paths: list[Path], reason: str = "edit") -> Snapshot:
     stored: list[Path] = []
     manifest: list[dict] = []
     for index, path in enumerate(paths):
+        # Resolved, because write_atomic writes through a symlink: the file
+        # an edit changes (or creates) is the link's target, and undo has to
+        # go back to that file even if the link is repointed in between.
+        try:
+            original = path.resolve()
+        except (OSError, RuntimeError):
+            original = path
         if not path.exists():
             # Record the absence, so restoring removes a file the edit created
-            # rather than leaving it behind. Resolved, because a dangling
-            # symlink is written through: the file created is its target.
-            try:
-                original = path.resolve()
-            except (OSError, RuntimeError):
-                original = path
+            # rather than leaving it behind.
             stored.append(path)
             manifest.append({"original": str(original), "absent": True})
             continue
@@ -85,7 +87,7 @@ def create(paths: list[Path], reason: str = "edit") -> Snapshot:
         dest = target / f"{index:02d}_{path.name}"
         shutil.copy2(path, dest)
         stored.append(path)
-        manifest.append({"original": str(path), "stored": dest.name})
+        manifest.append({"original": str(original), "stored": dest.name})
     (target / MANIFEST).write_text(
         json.dumps(
             {"reason": reason, "stamp": stamp, "seq": seq, "files": manifest},
