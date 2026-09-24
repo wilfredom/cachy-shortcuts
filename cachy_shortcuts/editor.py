@@ -77,10 +77,10 @@ def _commit(
     try:
         reparsed = backend.parse(path.read_text(encoding="utf-8"), path)
     except Exception as exc:  # noqa: BLE001 - any parse failure means roll back
-        backup.restore(snapshot)
+        _rollback(snapshot)
         raise EditError(f"{operation} produced an unparsable file, rolled back: {exc}")
     if not validate(reparsed):
-        backup.restore(snapshot)
+        _rollback(snapshot)
         raise EditError(f"{operation} did not take effect, rolled back")
     backend.reload()
     backup.prune()
@@ -100,34 +100,27 @@ def write_file(
     aren't (COSMIC keeps them in a different config context entirely), so the
     caller supplies the check instead.
     """
-    existed = path.exists()
     snapshot = backup.create([path], reason=operation)
     backup.write_atomic(path, new_text)
     try:
         written = path.read_text(encoding="utf-8")
     except OSError as exc:
-        _rollback(snapshot, path, existed)
+        _rollback(snapshot)
         raise EditError(f"cannot re-read {path} after {operation}: {exc}") from exc
     if not validate(written):
-        _rollback(snapshot, path, existed)
+        _rollback(snapshot)
         raise EditError(f"{operation} did not take effect, rolled back")
     backup.prune()
     return EditResult(operation=operation, path=path, snapshot=snapshot)
 
 
-def _rollback(snapshot: backup.Snapshot, path: Path, existed: bool) -> None:
+def _rollback(snapshot: backup.Snapshot) -> None:
     """Undo a write, including one that created the file.
 
-    ``backup.create`` skips paths that don't exist yet, so restoring a snapshot
-    of a brand-new file puts nothing back and leaves the bad file in place.
-    Deleting it is the honest rollback in that case.
+    The snapshot records a file that did not exist as absent, and restoring
+    it deletes the file again.
     """
     backup.restore(snapshot)
-    if not existed:
-        try:
-            path.unlink()
-        except OSError:
-            pass
 
 
 def add(

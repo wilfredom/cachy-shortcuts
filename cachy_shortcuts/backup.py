@@ -53,6 +53,15 @@ def create(paths: list[Path], reason: str = "edit") -> Snapshot:
     manifest: list[dict] = []
     for index, path in enumerate(paths):
         if not path.exists():
+            # Record the absence, so restoring removes a file the edit created
+            # rather than leaving it behind. Resolved, because a dangling
+            # symlink is written through: the file created is its target.
+            try:
+                original = path.resolve()
+            except (OSError, RuntimeError):
+                original = path
+            stored.append(path)
+            manifest.append({"original": str(original), "absent": True})
             continue
         # Flatten into the snapshot dir but keep names unique across dirs.
         dest = target / f"{index:02d}_{path.name}"
@@ -91,13 +100,22 @@ def list_snapshots() -> list[Snapshot]:
 
 
 def restore(snapshot: Snapshot) -> list[Path]:
-    """Put a snapshot's files back. Returns the paths restored."""
+    """Put a snapshot's files back. Returns the paths restored.
+
+    A file the snapshot recorded as absent is deleted, since the write being
+    undone is what created it.
+    """
     manifest = snapshot.path / MANIFEST
     data = json.loads(manifest.read_text(encoding="utf-8"))
     restored: list[Path] = []
     for entry in data.get("files", []):
-        stored = snapshot.path / entry["stored"]
         original = Path(entry["original"])
+        if entry.get("absent"):
+            if original.exists():
+                original.unlink()
+                restored.append(original)
+            continue
+        stored = snapshot.path / entry["stored"]
         if not stored.is_file():
             continue
         original.parent.mkdir(parents=True, exist_ok=True)

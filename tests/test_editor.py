@@ -361,6 +361,28 @@ class TestSafety:
         editor.undo_last()
         assert path.read_text() == before
 
+    def test_undo_removes_a_file_the_edit_created(self, cosmic_rw):
+        """A fresh COSMIC has no `custom` file until the first edit makes one."""
+        custom = cosmic_rw.write_target()
+        custom.unlink()
+        editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        assert custom.exists()
+        assert editor.undo_last() == [custom]
+        assert not custom.exists()
+
+    def test_a_rejected_edit_to_a_new_file_leaves_nothing_behind(
+        self, cosmic_rw, monkeypatch
+    ):
+        custom = cosmic_rw.write_target()
+        custom.unlink()
+        # Render something that parses but is not the requested binding.
+        monkeypatch.setattr(
+            cosmic_rw, "render", lambda *a, **k: '(modifiers: [Super], key: "z"): Close,'
+        )
+        with pytest.raises(editor.EditError, match="did not take effect"):
+            editor.add(cosmic_rw, Chord.parse("Super+Y"), "foot")
+        assert not custom.exists()
+
     def test_stale_span_is_refused(self, niri_rw):
         target = by_chord(niri_rw.read())["super+b"]
         # Simulate the file changing underneath us between read and write.
@@ -580,6 +602,12 @@ class TestWriteFile:
         with pytest.raises(editor.EditError, match="rolled back"):
             editor.write_file(path, "replacement\n", "test", lambda text: False)
         assert path.read_text() == "original\n"
+
+    def test_undo_removes_a_file_the_write_created(self, tmp_path):
+        path = tmp_path / "new" / "rules"
+        editor.write_file(path, "hello\n", "test", lambda text: True)
+        assert editor.undo_last() == [path]
+        assert not path.exists()
 
     def test_the_write_is_undoable(self, tmp_path):
         path = tmp_path / "rules"
