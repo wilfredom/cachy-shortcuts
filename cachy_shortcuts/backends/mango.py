@@ -230,9 +230,16 @@ class MangoBackend(Backend):
         eq = extras.get("eq") or "="
         seps = list(extras.get("seps") or [])
         had_args = len(seps) == 3
-        seps += [seps[-1] if seps else ","] * (3 - len(seps))
+        seps += [seps[0] if seps else ","] * (3 - len(seps))
+        last = seps[2]
+        if args and not extras.get("args"):
+            # `killclient,` ends in a bare comma; hanging args off it would
+            # read `spawn,foo` on a line spaced `SUPER, q`.
+            last = seps[0]
+        elif not args:
+            last = last.rstrip()
         # `killclient,` keeps its trailing comma; `reload_config` stays bare.
-        tail = f"{seps[2]}{args}" if args or had_args or not extras else ""
+        tail = f"{last}{args}" if args or had_args or not extras else ""
         return f"{keyword}{eq}{mods}{seps[0]}{key}{seps[1]}{command}{tail}"
 
     def insertion_point(self, text: str) -> tuple[int, str, str]:

@@ -91,6 +91,20 @@ class TestRoundTripFidelity:
         text = target.source.path.read_text()
         assert "bind = SUPER, r, spawn, foot\n" in text
 
+    @pytest.mark.parametrize(
+        "line, action, expected",
+        [
+            ("bind = SUPER, b, spawn, firefox", "killclient", "bind = SUPER, b, killclient,"),
+            ("bind = SUPER, q, killclient,", "spawn foot", "bind = SUPER, q, spawn, foot"),
+            ("bind=SUPER,q,killclient,", "spawn foot", "bind=SUPER,q,spawn,foot"),
+            ("bind = SUPER, r, reload_config", "spawn foot", "bind = SUPER, r, spawn, foot"),
+        ],
+    )
+    def test_mango_render_follows_the_lines_spacing(self, mango_rw, line, action, expected):
+        path = mango_rw.config_paths()[0]
+        (shortcut,) = mango_rw.parse(line + "\n", path)
+        assert mango_rw.render(shortcut.chord, action, extras=shortcut.extras) == expected
+
     def test_mango_preserves_raw_keycodes(self, mango_rw):
         found = by_chord(mango_rw.read())
         target = found["code:133+code:64+code:24"]
