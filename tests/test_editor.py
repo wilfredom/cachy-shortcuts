@@ -431,6 +431,18 @@ class TestMangoSystemConfig:
         editor.undo_last()
         assert not backend.write_target().exists()
 
+    def test_an_unreadable_system_config_refuses_the_edit(self, fresh):
+        """Seeding nothing would create a user config holding only the new
+        bind; mango would then read that instead of /etc and lose every
+        system bind, while the edit reported success."""
+        backend, system = fresh
+        # One Latin-1 byte in a comment: mango's C parser does not care.
+        system.write_bytes(b"# Konfiguration f\xfcr mango\n" + system.read_bytes())
+        with pytest.raises(editor.EditError, match="cannot create"):
+            editor.add(backend, Chord.parse("Super+Y"), "spawn foot")
+        assert not backend.write_target().exists()
+        assert backup.list_snapshots() == []
+
     def test_a_refused_write_is_an_edit_error(self, fresh, monkeypatch):
         """Not a PermissionError traceback out of the CLI."""
         backend, _ = fresh

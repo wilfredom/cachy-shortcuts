@@ -174,7 +174,11 @@ class Backend(ABC):
         return path
 
     def seed_text(self, path: Path) -> str:
-        """What ``path`` starts as when an edit is about to create it."""
+        """What ``path`` starts as when an edit is about to create it.
+
+        Raises OSError or UnicodeDecodeError when the seed exists but can't be
+        read; the edit is refused rather than started from nothing.
+        """
         return ""
 
     @abstractmethod

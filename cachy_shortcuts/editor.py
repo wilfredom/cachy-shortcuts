@@ -67,9 +67,16 @@ def read_for_edit(backend: Backend, path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return backend.seed_text(path)
+        pass
     except (OSError, UnicodeDecodeError) as exc:
         raise EditError(f"cannot read {path}: {exc}") from exc
+    try:
+        return backend.seed_text(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise EditError(
+            f"cannot create {path}: the config it replaces can't be read "
+            f"to copy from ({exc})"
+        ) from exc
 
 
 def _write(snapshot: backup.Snapshot, path: Path, text: str) -> None:

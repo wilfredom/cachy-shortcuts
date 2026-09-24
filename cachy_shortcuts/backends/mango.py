@@ -127,13 +127,12 @@ class MangoBackend(Backend):
 
         A user config.conf replaces the system one outright, so creating it
         with only the new bind would silently drop every default bind.
+        That is also why a system config that exists but can't be read (no
+        permission, not UTF-8) raises instead of seeding nothing.
         """
-        if path != self.write_target():
+        if path != self.write_target() or not self._system.exists():
             return ""
-        try:
-            return self._system.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return ""
+        return self._system.read_text(encoding="utf-8")
 
     def _collect(self, path: Path, out: list[Path], visited: set[Path]) -> None:
         try:
