@@ -225,7 +225,12 @@ def add(
     path = _target_file(backend, None)
     text = read_for_edit(backend, path)
     rendered = backend.render(chord, action, description)
-    new_text = _insert(backend, text, rendered)
+    offset, prefix, suffix = backend.insertion_point(text)
+    moved = backend.placement(path, offset, rendered)
+    if moved is not None:
+        path, offset, prefix, suffix = moved
+        text = read_for_edit(backend, path)
+    new_text = text[:offset] + prefix + rendered + suffix + text[offset:]
     return _commit(
         backend,
         path,

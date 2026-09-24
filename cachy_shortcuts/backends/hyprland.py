@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import APP_IDS, RULE_MARKER
@@ -336,12 +337,14 @@ class HyprlandBackend(Backend):
         variables: dict,
         submap: str,
         visit,
+        trace: list | None = None,
     ) -> str:
         """Append ``text``'s binds to ``out``; returns the submap it ends in.
 
         An ``unbind`` disables what is already in ``out``. With ``visit``, a
         ``source`` line hands each file and the current submap to it, and
-        carries on in the submap that file leaves.
+        carries on in the submap that file leaves. ``trace`` collects every
+        line, and each file's end, in load order (see ``placement``).
         """
         offset = 0
         for lineno, line in enumerate(text.splitlines(keepends=True), start=1):
@@ -349,6 +352,8 @@ class HyprlandBackend(Backend):
             if not stripped or stripped.startswith("#"):
                 offset += len(line)
                 continue
+            if trace is not None:
+                trace.append(_Line(path, offset, offset + len(line), stripped, submap))
 
             sub = _SUBMAP_RE.match(stripped)
             if sub:
@@ -377,6 +382,8 @@ class HyprlandBackend(Backend):
             if shortcut is not None:
                 out.append(shortcut)
             offset += len(line)
+        if trace is not None:
+            trace.append(_Line(path, len(text), len(text), "", submap))
         return submap
 
     def _bind(
@@ -458,6 +465,9 @@ class HyprlandBackend(Backend):
         reaches every bind before it -- including one from the main file or
         an earlier include, which is the usual "overrides file" layout.
         """
+        return self._load()
+
+    def _load(self, trace: list | None = None) -> list[Shortcut]:
         paths = self.config_paths()
         if not paths:
             return []
@@ -478,10 +488,55 @@ class HyprlandBackend(Backend):
             except (OSError, UnicodeDecodeError):
                 return submap
             file_vars = self._file_variables(text, variables)
-            return self._walk(text, path, out, file_vars, submap, visit)
+            return self._walk(text, path, out, file_vars, submap, visit, trace)
 
         visit(paths[0], "")
         return out
+
+    def placement(
+        self, path: Path, offset: int, rendered: str
+    ) -> tuple[Path, int, str, str] | None:
+        """After the last ``unbind`` that would remove a bind put at path:offset.
+
+        An ``unbind`` removes the binds loaded before it, and an overrides
+        file sourced at the end of the main config is the usual place for
+        one -- so the chords claimant() reports free are exactly the ones a
+        new bind in the main file loses again. Placed straight after the
+        last such unbind, the new bind is the override it was meant to be.
+        """
+        trace: list[_Line] = []
+        self._load(trace)
+        variables = self.variables()
+        probe = self._bind(rendered, rendered.strip(), 1, 0, path, variables, "")
+        if probe is None:
+            return None
+        try:
+            where = path.resolve()
+        except OSError:
+            return None
+        here = next(
+            (
+                i
+                for i, line in enumerate(trace)
+                if line.start >= offset and line.path.resolve() == where
+            ),
+            None,
+        )
+        if here is None:
+            return None
+        last = None
+        for line in trace[here:]:
+            unbind = _UNBIND_RE.match(line.text)
+            if unbind and _unbind_matches(unbind.group("rest"), probe, variables):
+                last = line
+        if last is None:
+            return None
+        text = last.path.read_text(encoding="utf-8")
+        raw = text[last.start : last.end]
+        indent = raw[: len(raw) - len(raw.lstrip())]
+        if not raw.endswith("\n"):
+            return (last.path, last.end, "\n" + indent, "")
+        return (last.path, last.end, indent, "\n")
 
     # --- writing -----------------------------------------------------------
 
@@ -699,33 +754,46 @@ def _apply_unbind(
     submap (KeybindManager::removeKeybind ignores the submap). A line whose
     chord can't be read removes nothing, as a guess would hide a live bind.
     """
-    value = rest.strip()
-    if value == "all":
-        targets = earlier
-    else:
-        mods_raw, _, key_raw = value.partition(",")
-        if not key_raw.strip():
-            return
-        # Not Chord equality: removeKeybind compares the modmask and the key
-        # *string* exactly (KeybindManager.cpp:198, v0.56.2), so an unbind
-        # of `t` leaves a bind on `T` in place.
-        wanted = (
-            _modmask(_expand(mods_raw, variables)),
-            _key_identity(_expand(key_raw.split(",", 1)[0], variables)),
-        )
-        targets = [
-            s
-            for s in earlier
-            if (
-                _modmask(_expand(s.extras.get("mods_raw", ""), variables)),
-                _key_identity(_expand(s.extras.get("key_raw", ""), variables)),
-            )
-            == wanted
-        ]
-    for shortcut in targets:
-        if not shortcut.extras.get("disabled"):
+    for shortcut in earlier:
+        if not shortcut.extras.get("disabled") and _unbind_matches(
+            rest, shortcut, variables
+        ):
             shortcut.extras["disabled"] = True
             shortcut.extras["disabled_by"] = where
+
+
+def _unbind_matches(rest: str, shortcut: Shortcut, variables: dict[str, str]) -> bool:
+    """Whether ``unbind = <rest>`` removes ``shortcut``.
+
+    Not Chord equality: removeKeybind compares the modmask and the key
+    *string* exactly (KeybindManager.cpp:198, v0.56.2), so an unbind of `t`
+    leaves a bind on `T` in place.
+    """
+    value = rest.strip()
+    if value == "all":
+        return True
+    mods_raw, _, key_raw = value.partition(",")
+    if not key_raw.strip():
+        return False
+    wanted = (
+        _modmask(_expand(mods_raw, variables)),
+        _key_identity(_expand(key_raw.split(",", 1)[0], variables)),
+    )
+    return (
+        _modmask(_expand(shortcut.extras.get("mods_raw", ""), variables)),
+        _key_identity(_expand(shortcut.extras.get("key_raw", ""), variables)),
+    ) == wanted
+
+
+@dataclass(frozen=True)
+class _Line:
+    """One line of the config in load order: file, span, code, submap."""
+
+    path: Path
+    start: int
+    end: int
+    text: str
+    submap: str
 
 
 # stringToModMask (KeybindManager.cpp, v0.56.2): each bit is set when any of

@@ -240,6 +240,59 @@ class TestSurgicalWrites:
         editor.retarget(mango_rw, target, "spawn kitty")
         assert "bind=SUPER,F9,spawn,kitty  # terminal\n" in path.read_text()
 
+    def test_hyprland_add_goes_after_an_unbind_of_its_chord(self, tmp_path):
+        """An overrides file sourced last unbinds Super+Y, so claimant() calls
+        the chord free. Added in the main file, before the source line, the
+        new bind would be unbound again; it goes after the unbind instead."""
+        root = tmp_path / "hypr"
+        root.mkdir()
+        (root / "hyprland.conf").write_text(
+            "bind = SUPER, Y, exec, old-default\n"
+            "bind = SUPER, Q, killactive,\n"
+            "source = overrides.conf\n"
+        )
+        (root / "overrides.conf").write_text("  unbind = SUPER, Y\n")
+        hypr = HyprlandBackend(config_root=root)
+        chord = Chord.parse("Super+Y")
+        assert conflicts.claimant(chord, hypr.read()) is None
+        result = editor.add(hypr, chord, "exec foot")
+        assert result.path == root / "overrides.conf"
+        assert (root / "overrides.conf").read_text() == (
+            "  unbind = SUPER, Y\n  bind = SUPER, Y, exec, foot\n"
+        )
+        assert conflicts.claimant(chord, hypr.read()).action == "exec foot"
+
+    def test_hyprland_add_goes_after_a_later_unbind_in_the_same_file(self, tmp_path):
+        root = tmp_path / "hypr"
+        root.mkdir()
+        conf = root / "hyprland.conf"
+        conf.write_text("bind = SUPER, Y, exec, old-default\nunbind = SUPER, Y")
+        hypr = HyprlandBackend(config_root=root)
+        editor.add(hypr, Chord.parse("Super+Y"), "exec foot")
+        assert conf.read_text() == (
+            "bind = SUPER, Y, exec, old-default\nunbind = SUPER, Y\n"
+            "bind = SUPER, Y, exec, foot"
+        )
+        live = [s.action for s in hypr.read() if not s.extras.get("disabled")]
+        assert live == ["exec foot"]
+
+    def test_hyprland_rebind_onto_an_unbound_chord_is_refused(self, tmp_path):
+        root = tmp_path / "hypr"
+        root.mkdir()
+        conf = root / "hyprland.conf"
+        conf.write_text(
+            "bind = SUPER, Q, killactive,\n"
+            "bind = SUPER, Y, exec, old-default\n"
+            "source = overrides.conf\n"
+        )
+        (root / "overrides.conf").write_text("unbind = SUPER, Y\n")
+        before = conf.read_text()
+        hypr = HyprlandBackend(config_root=root)
+        target = by_chord(hypr.read())["super+q"]
+        with pytest.raises(editor.EditError, match="overrides.conf:1 removes it"):
+            editor.rebind(hypr, target, Chord.parse("Super+Y"))
+        assert conf.read_text() == before
+
     def test_add_to_hyprland_stays_out_of_the_submap(self, hypr_rw):
         """A new global bind appended inside a submap would only fire in it."""
         editor.add(hypr_rw, Chord.parse("Super+N"), "exec obsidian", "Notes")

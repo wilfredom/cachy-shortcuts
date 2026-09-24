@@ -183,6 +183,17 @@ class Backend(ABC):
         """
         return ""
 
+    def placement(
+        self, path: Path, offset: int, rendered: str
+    ) -> tuple[Path, int, str, str] | None:
+        """Where a new binding must go instead of ``path:offset``, if anywhere.
+
+        For a compositor where something loaded later can remove a binding
+        (Hyprland's ``unbind``). Returns ``(path, offset, prefix, suffix)``
+        like ``insertion_point``, or None to keep the usual place.
+        """
+        return None
+
     def deletion_span(self, text: str, start: int, end: int) -> tuple[int, int]:
         """The characters to cut to remove the binding at ``text[start:end]``.
 
