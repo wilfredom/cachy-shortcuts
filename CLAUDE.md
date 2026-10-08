@@ -63,6 +63,14 @@ fully testable), `render(chord, action, description, extras)`,
 `insertion_point(text) -> (offset, prefix, suffix)`, plus optional
 `float_rule()`, `reload()` and `focused_window()`.
 
+The editor also calls overridable write hooks with safe defaults — check these
+before special-casing a backend in `editor.py`: `unsupported()` (refuse all
+writes, Hyprland Lua), `write_path(path)` / `seed_text(path)` (redirect an edit
+away from a system file; mango copies the system config verbatim into the new
+user file, since a user `config.conf` replaces it outright), `placement()`
+(move an insertion past a later `unbind`, Hyprland) and `deletion_span()` (what
+a delete cuts, niri overrides it).
+
 Offsets are **character** offsets into the decoded UTF-8 text, not bytes.
 
 `backends/_kdl.py` is a shared *scanner*, not a parser — used by `niri.py`
@@ -106,9 +114,10 @@ for it in `tests/conftest.py`.
 moves, so comments, ordering and formatting survive. Validation re-parses the
 result and rolls the snapshot back if the edit didn't take.
 `backup.py` owns snapshots (`~/.local/share/cachy-shortcuts/backups/`),
-`write_atomic`, `restore` and pruning. COSMIC is the special case: its
-`defaults` file is system-owned, so an edit to a default becomes an override in
-the user's `custom` file (`editor._target_file`).
+`write_atomic`, `restore` and pruning. `editor._target_file` picks the file:
+COSMIC is hard-coded there (an edit to a system-owned `defaults` binding
+becomes an override in the user's `custom` file); every other backend goes
+through `write_path`.
 
 ### Conflict detection is scoped, not global
 
@@ -127,6 +136,7 @@ This split is deliberate and load-bearing — keep the GTK files thin.
 | Module | GTK? | Holds |
 |---|---|---|
 | `ui/viewmodel.py` | no | Browsing: filtering, grouping, selection, modes |
+| `ui/style.py` | no | The overlay CSS, built from the contrast-checked palette (no tests) |
 | `ui/form_model.py` | no | The add/edit form: focus order, chord arming/capture, app suggestions, conflicts, validation |
 | `ui/_layershell.py` | yes | Loads `libgtk4-layer-shell.so` **before** GTK pulls in libwayland-client |
 | `ui/chord_field.py` | yes | GDK key events → `Chord` |
@@ -151,7 +161,11 @@ is navigation while anything with a modifier held is a chord to record.
 
 `tests/conftest.py` exposes one fixture per backend (`niri`, `hyprland`,
 `hyprland_vanilla`, `hyprland_lua`, `cosmic`, `mango`, plus `all_backends`),
-each pointed at a config tree in `tests/fixtures/`. `hyprland_vanilla` is the
+each pointed at a config tree in `tests/fixtures/` via the backend constructor's
+`config_root=` (COSMIC also takes `system_root=` for its `defaults`) — that
+argument is how a test redirects a backend away from `~/.config`.
+`all_backends` is `niri`, `hyprland`, `mango`, `cosmic` only — not the Hyprland
+variants. `hyprland_vanilla` is the
 same compositor with no shell — no `$variables`, no Noctalia binds — and exists
 so shell-specific handling can't silently become mandatory. `hyprland_lua` is a
 Lua config with a stale `hyprland.conf` beside it. `by_chord(shortcuts)`
@@ -181,6 +195,8 @@ compositor, then everything installed — so a subcommand should never call
   shipping a theme; `ensure_contrast` enforces a WCAG floor (7:1 body, 4.5:1
   secondary, 3:1 muted) so a borrowed palette can't make the overlay
   unreadable. Best-effort by design — every failure path falls back.
+- `docs/overlay-preview.html` — a sketch of the *first* overlay design, now
+  stale (README says so). Don't treat it as a spec or update it to match.
 - `cheatsheets/` — bundled read-only reference packs for app-owned shortcuts,
   surfaced by focused app id. These have no `SourceRef` and must stay
   uneditable.
