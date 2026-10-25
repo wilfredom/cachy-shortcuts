@@ -7,7 +7,7 @@
 
 pkgname=cachy-shortcuts
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="An editable, searchable keybinding atlas for COSMIC, Niri, Hyprland and MangoWM"
 arch=('any')
 url="https://github.com/wilfredom/cachy-shortcuts"
