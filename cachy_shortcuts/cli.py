@@ -165,6 +165,8 @@ def cmd_doctor(args) -> int:
         print(f"    bindings : {len(shortcuts)}")
         for path in existing:
             print(f"    config   : {path}")
+        for note in backend.notes():
+            print(f"    {_c('note     :', DIM)} {note}")
         found = conflicts.find_conflicts(shortcuts)
         total_conflicts += len(found)
         if found:

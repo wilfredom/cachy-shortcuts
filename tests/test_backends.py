@@ -1,5 +1,6 @@
 """Parser tests against realistic configs for every supported compositor."""
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -439,22 +440,27 @@ class TestHyprlandReader:
 
 
 class TestHyprlandLuaConfig:
-    """Hyprland 0.55+ loads hyprland.lua over hyprland.conf. The Lua config is
-    not readable here, so the ignored .conf must not stand in for it."""
+    """Hyprland 0.55+ loads hyprland.lua over hyprland.conf, so the Lua config
+    is what is read -- and the ignored .conf beside it must not stand in."""
 
     def test_the_lua_file_is_what_hyprland_loads(self, hyprland_lua):
         assert hyprland_lua.main_config().name == "hyprland.lua"
         assert hyprland_lua.lua_config() == hyprland_lua.main_config()
 
+    def test_the_lua_files_are_listed_with_the_binds_file_first(self, hyprland_lua):
+        names = [p.name for p in hyprland_lua.config_paths()]
+        assert names[0] == "binds.lua"  # where new binds belong
+        assert set(names) == {"binds.lua", "hyprland.lua", "variables.lua"}
+        assert "hyprland.conf" not in names
+
     def test_the_ignored_conf_is_not_read(self, hyprland_lua):
-        assert hyprland_lua.config_paths() == []
-        assert hyprland_lua.read() == []
+        found = by_chord(hyprland_lua.read())
+        # the stale conf binds Super+Q to killactive; the Lua one to window.close()
+        assert found["super+q"].action == "window.close()"
+        assert all("killactive" not in s.action for s in hyprland_lua.read())
 
-    def test_the_reason_names_the_lua_file(self, hyprland_lua):
-        assert "hyprland.lua" in hyprland_lua.unsupported()
-
-    def test_no_float_rule_is_offered(self, hyprland_lua):
-        assert hyprland_lua.float_rule() is None
+    def test_nothing_is_refused(self, hyprland_lua):
+        assert hyprland_lua.unsupported() is None
 
     def test_a_conf_only_config_is_unaffected(self, hyprland):
         assert hyprland.unsupported() is None
@@ -472,14 +478,160 @@ class TestHyprlandLuaConfig:
         assert backend.config_paths() == [explicit]
         assert "super+q" in by_chord(backend.read())
 
-    def test_hyprland_config_env_pointing_at_lua_is_unsupported(
+    def test_hyprland_config_env_pointing_at_lua_reads_that_lua(
         self, tmp_path, monkeypatch
     ):
         from cachy_shortcuts.backends import HyprlandBackend
 
+        main = tmp_path / "main.lua"
+        main.write_text('hl.bind("SUPER + Q", hl.dsp.window.close())\n')
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-        monkeypatch.setenv("HYPRLAND_CONFIG", str(tmp_path / "main.lua"))
-        assert "main.lua" in HyprlandBackend().unsupported()
+        monkeypatch.setenv("HYPRLAND_CONFIG", str(main))
+        backend = HyprlandBackend()
+        assert backend.lua_config() == main
+        assert "super+q" in by_chord(backend.read())
+
+
+class TestHyprlandLuaParse:
+    """The scanner alone: what one file says, with no lua to evaluate it."""
+
+    @pytest.fixture
+    def parsed(self, hyprland_lua):
+        path = next(p for p in hyprland_lua.config_paths() if p.name == "binds.lua")
+        return by_chord(hyprland_lua.parse(path.read_text(), path)), path
+
+    def test_mod_concatenation_folds_to_a_chord(self, parsed):
+        found, _ = parsed
+        assert found["super+q"].action == "window.close()"
+        assert found["alt+tab"].action == "window.cycle_next()"
+
+    def test_constants_from_another_file_fold(self, parsed):
+        found, _ = parsed
+        # TERMINAL is defined in config/variables.lua, launchPrefix in this file
+        assert found["super+return"].action == "exec uwsm app -- kitty"
+
+    def test_exec_cmd_reads_as_the_exec_action_every_backend_uses(self, parsed):
+        found, _ = parsed
+        assert found["super+space"].action == "exec noctalia msg panel-toggle launcher"
+        assert found["super+space"].owner == "Noctalia"
+
+    def test_other_dispatchers_keep_their_source_minus_the_namespace(self, parsed):
+        found, _ = parsed
+        assert found["super+alt+space"].action == 'window.float({ action = "toggle" })'
+
+    def test_the_description_option_is_the_description(self, parsed):
+        found, _ = parsed
+        assert found["super+w"].description == "Browser"
+
+    def test_bind_options_become_flags(self, parsed):
+        found, _ = parsed
+        assert found["xf86audioraisevolume"].extras["flags"] == ["locked", "repeating"]
+
+    def test_mouse_and_keycode_spellings_normalise(self, parsed):
+        found, _ = parsed
+        assert "super+mouse:272" in found
+        assert "super+mouse_down" in found
+        assert "super+code:82" in found
+
+    def test_an_inline_function_is_a_lua_function_action(self, parsed):
+        found, _ = parsed
+        assert found["super+minus"].action == "lua function"
+
+    def test_comments_and_long_strings_hold_no_binds(self, parsed):
+        found, _ = parsed
+        assert "super+z" not in found
+        assert "super+y" not in found
+
+    def test_the_source_span_is_exactly_the_call(self, parsed):
+        found, path = parsed
+        q = found["super+q"]
+        text = path.read_text()
+        assert text[q.source.start : q.source.end] == q.raw
+        assert q.raw == 'hl.bind(mainMod .. " + Q",           hl.dsp.window.close())'
+
+    def test_submap_binds_are_scoped_to_their_mode(self, parsed):
+        found, _ = parsed
+        assert found["h"].extras["submap"] == "resize"
+        assert found["escape"].extras["submap"] == "resize"
+        assert found["super+r"].extras["submap"] == ""
+
+    def test_an_unbind_disables_the_earlier_bind(self, parsed):
+        found, _ = parsed
+        assert found["super+b"].extras["disabled"] is True
+
+    def test_binds_made_by_loops_and_helpers_are_not_editable_spans(self, parsed):
+        found, _ = parsed
+        assert "super+alt+code:10" not in found
+        assert "super+shift+code:10" not in found
+
+
+class TestHyprlandLuaEvaluation:
+    """With lua on the machine the config is run, which is the only way to see
+    the binds a loop or helper function makes."""
+
+    needs_lua = pytest.mark.skipif(shutil.which("lua") is None, reason="no lua")
+
+    @needs_lua
+    def test_loop_and_helper_binds_are_listed(self, hyprland_lua):
+        found = by_chord(hyprland_lua.read())
+        assert found["super+shift+code:10"].action == 'window.move({ monitor = "HDMI-A-1" })'
+        assert found["super+alt+code:10"].action == "focus({ workspace = 1 })"
+        assert found["super+alt+code:11"].action == "focus({ workspace = 2 })"
+
+    @needs_lua
+    def test_generated_binds_have_no_span_and_say_why(self, hyprland_lua):
+        found = by_chord(hyprland_lua.read())
+        gen = found["super+alt+code:11"]
+        assert gen.source is None
+        assert gen.extras["generated"] is True
+        assert "binds.lua" in gen.extras["readonly_reason"]
+
+    @needs_lua
+    def test_a_scanner_bind_keeps_its_span_when_evaluated(self, hyprland_lua):
+        q = by_chord(hyprland_lua.read())["super+q"]
+        assert q.source is not None
+        assert q.raw.startswith("hl.bind(")
+
+    @needs_lua
+    def test_every_bind_appears_once(self, hyprland_lua):
+        chords = [(s.chord.canonical, s.extras.get("submap")) for s in hyprland_lua.read()]
+        assert len(chords) == len(set(chords))
+
+    @needs_lua
+    def test_the_unbind_is_applied_by_evaluation_too(self, hyprland_lua):
+        assert by_chord(hyprland_lua.read())["super+b"].extras["disabled"] is True
+
+    @needs_lua
+    def test_generated_binds_take_part_in_conflict_detection(self, hyprland_lua):
+        from cachy_shortcuts import conflicts
+
+        taken = conflicts.claimant(
+            Chord.parse("Super+Alt+code:11"), hyprland_lua.read()
+        )
+        assert taken is not None
+
+    def test_without_lua_only_what_the_scanner_can_place_is_listed(
+        self, hyprland_lua, monkeypatch
+    ):
+        from cachy_shortcuts.backends import _lua
+
+        monkeypatch.setattr(_lua, "evaluate", lambda *a, **k: None)
+        found = by_chord(hyprland_lua.read())
+        assert "super+q" in found
+        assert "super+alt+code:11" not in found
+        assert found["super+b"].extras["disabled"] is True
+        assert all(s.source is not None for s in found.values())
+
+    def test_a_config_that_errors_keeps_what_it_got_to(self, tmp_path):
+        from cachy_shortcuts.backends import HyprlandBackend
+
+        (tmp_path / "hyprland.lua").write_text(
+            'hl.bind("SUPER + Q", hl.dsp.window.close())\n'
+            "error('boom')\n"
+            'hl.bind("SUPER + W", hl.dsp.exec_cmd("firefox"))\n'
+        )
+        found = by_chord(HyprlandBackend(config_root=tmp_path).read())
+        assert {"super+q", "super+w"} <= set(found)  # the scanner covers the rest
 
 
 class TestCosmicReader:

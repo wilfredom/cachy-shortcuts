@@ -23,7 +23,11 @@ def env(tmp_path, monkeypatch):
     shutil.copytree(FIXTURES / "cosmic" / "config" / "cosmic", config / "cosmic")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.delenv("NIRI_SOCKET", raising=False)
+    # The developer's own session must not leak into detection: this is run
+    # from inside a real compositor as often as not.
+    for variable in ("NIRI_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_SESSION_DESKTOP",
+                     "DESKTOP_SESSION"):
+        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv("XDG_CURRENT_DESKTOP", "niri")
     return config
 
@@ -218,12 +222,15 @@ class TestDoctor:
         cli.main(["doctor"])
         assert "active session : niri" in capsys.readouterr().out
 
-    def test_says_a_hyprland_lua_config_is_not_supported(self, env, capsys):
-        (env / "hypr" / "hyprland.lua").write_text('require("config.binds")\n')
+    def test_reads_a_hyprland_lua_config_and_says_so(self, env, capsys):
+        lua = env / "hypr" / "hyprland.lua"
+        lua.write_text('hl.bind("SUPER + Q", hl.dsp.window.close())\n')
         cli.main(["doctor"])
         out = capsys.readouterr().out
-        assert "not supported" in out
-        assert str(env / "hypr" / "hyprland.lua") in out
+        assert "not supported" not in out
+        assert f"config   : {lua}" in out
+        assert "bindings : 1" in out
+        assert "hyprland.conf" not in out  # Hyprland ignores it
 
     def test_exit_code_flags_conflicts(self, env, capsys):
         conf = env / "mango" / "config.conf"
@@ -361,11 +368,13 @@ class TestInstallHotkey:
         mine = next(s for s in backend.read() if s.owner == "cachy-shortcuts")
         assert mine.chord != Chord.parse("Mod+Shift+Slash")
 
-    def test_a_hyprland_lua_config_is_skipped_with_the_reason(self, env, capsys):
-        (env / "hypr" / "hyprland.lua").write_text('require("config.binds")\n')
+    def test_a_hyprland_lua_config_gets_the_hotkey_in_lua(self, env, capsys):
+        lua = env / "hypr" / "hyprland.lua"
+        lua.write_text('hl.bind("SUPER + Q", hl.dsp.window.close())\n')
         before = (env / "hypr" / "hyprland.conf").read_text()
-        assert cli.main(["install-hotkey"]) == 1
-        assert "Hyprland: skipped" in capsys.readouterr().out
+        cli.main(["install-hotkey"])
+        assert "Hyprland: bound" in capsys.readouterr().out
+        assert 'hl.dsp.exec_cmd("cachy-shortcuts overlay --toggle")' in lua.read_text()
         assert (env / "hypr" / "hyprland.conf").read_text() == before
 
     def test_is_idempotent(self, env, capsys):

@@ -12,6 +12,21 @@ from cachy_shortcuts.backends import (
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def no_live_reload(monkeypatch):
+    """A write test must not ask the developer's running compositor to reload.
+
+    Tests run from inside a real session as often as not, and every
+    successful edit ends in ``backend.reload()``.
+    """
+    from cachy_shortcuts.backends.base import Backend
+
+    monkeypatch.setattr(Backend, "reload", lambda self: None)
+    for cls in (CosmicBackend, HyprlandBackend, MangoBackend, NiriBackend):
+        if "reload" in vars(cls):
+            monkeypatch.setattr(cls, "reload", lambda self: None)
+
+
 @pytest.fixture
 def niri():
     return NiriBackend(config_root=FIXTURES / "niri")

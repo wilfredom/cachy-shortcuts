@@ -201,7 +201,9 @@ class OverlayModel:
         here means the UI never even opens an edit flow for one.
         """
         if target.source is None:
-            self.status = self._READONLY_STATUS
+            # A bind that is real but has no span of its own (Hyprland's
+            # loop-generated ones) says why; a cheat-sheet entry gets the default.
+            self.status = target.extras.get("readonly_reason") or self._READONLY_STATUS
             return True
         return False
 

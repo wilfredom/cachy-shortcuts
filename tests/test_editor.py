@@ -558,28 +558,149 @@ class TestMangoSystemConfig:
         assert backup.list_snapshots() == []
 
 
-class TestHyprlandLuaRefusal:
+class TestHyprlandLuaEditing:
+    """Edits to hyprland.lua are as surgical as to a .conf: the touched argument
+    of one call changes and nothing else moves."""
+
     @pytest.fixture
     def lua_rw(self, tmp_path):
         root = tmp_path / "hypr"
         shutil.copytree(FIXTURES / "hyprland-lua", root)
         return HyprlandBackend(config_root=root)
 
-    def test_add_is_refused_naming_the_lua_file(self, lua_rw):
-        """Writing the .conf Hyprland ignores would report a success that
-        does nothing."""
+    @staticmethod
+    def binds(backend):
+        return backend._root / "config" / "binds.lua"
+
+    @staticmethod
+    def changed(before: str, after: str) -> tuple[list[str], list[str]]:
+        old, new = before.splitlines(), after.splitlines()
+        return [l for l in old if l not in new], [l for l in new if l not in old]
+
+    def test_add_lands_after_the_last_top_level_bind(self, lua_rw):
+        editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        lines = self.binds(lua_rw).read_text().splitlines()
+        i = next(n for n, l in enumerate(lines) if '" + S"' in l)
+        assert lines[i + 1] == 'hl.bind(mainMod .. " + Y", hl.dsp.exec_cmd("foot"))'
+
+    def test_a_new_bind_is_spelled_the_way_the_file_does(self, lua_rw):
+        editor.add(lua_rw, Chord.parse("Super+Shift+Y"), "exec foot", "Terminal")
+        text = self.binds(lua_rw).read_text()
+        assert (
+            'hl.bind(mainMod .. " + SHIFT + Y", hl.dsp.exec_cmd("foot"), '
+            '{ description = "Terminal" })'
+        ) in text
+        assert "super+shift+y" in by_chord(lua_rw.read())
+
+    def test_a_command_with_quotes_is_escaped(self, lua_rw):
+        editor.add(lua_rw, Chord.parse("Super+Y"), 'exec sh -c "echo \\"hi\\""')
+        found = by_chord(lua_rw.read())["super+y"]
+        assert found.action == 'exec sh -c "echo \\"hi\\""'
+
+    def test_the_conf_hyprland_ignores_is_never_touched(self, lua_rw):
         conf = lua_rw._root / "hyprland.conf"
         before = conf.read_text()
-        with pytest.raises(editor.EditError, match="hyprland.lua"):
-            editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        editor.delete(lua_rw, by_chord(lua_rw.read())["super+q"])
         assert conf.read_text() == before
+
+    def test_changing_the_command_touches_one_argument(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.update(lua_rw, by_chord(lua_rw.read())["super+return"], action="exec foot")
+        old, new = self.changed(before, self.binds(lua_rw).read_text())
+        assert old == ['hl.bind(mainMod .. " + Return",      hl.dsp.exec_cmd(launchPrefix .. TERMINAL))']
+        assert new == ['hl.bind(mainMod .. " + Return",      hl.dsp.exec_cmd("foot"))']
+
+    def test_changing_the_chord_keeps_the_command_source(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.update(lua_rw, by_chord(lua_rw.read())["super+return"], chord=Chord.parse("Super+T"))
+        old, new = self.changed(before, self.binds(lua_rw).read_text())
+        assert new == ['hl.bind(mainMod .. " + T",      hl.dsp.exec_cmd(launchPrefix .. TERMINAL))']
+        assert by_chord(lua_rw.read())["super+t"].action == "exec uwsm app -- kitty"
+
+    def test_an_unchanged_form_save_rewrites_nothing(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        for key, shortcut in list(by_chord(lua_rw.read()).items()):
+            if shortcut.source is None:
+                continue
+            editor.update(lua_rw, shortcut)
+            assert self.binds(lua_rw).read_text() == before, key
+
+    def test_a_description_is_edited_inside_the_options_table(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.update(lua_rw, by_chord(lua_rw.read())["super+w"], description="Web")
+        _, new = self.changed(before, self.binds(lua_rw).read_text())
+        assert new == ['hl.bind(mainMod .. " + W",     hl.dsp.exec_cmd(launchPrefix .. BROWSER), { description = "Web" })']
+
+    def test_a_description_is_added_beside_the_other_options(self, lua_rw):
+        editor.update(
+            lua_rw, by_chord(lua_rw.read())["xf86audioraisevolume"], description="Louder"
+        )
+        found = by_chord(lua_rw.read())["xf86audioraisevolume"]
+        assert found.description == "Louder"
+        assert found.extras["flags"] == ["locked", "repeating"]
+
+    def test_clearing_the_only_option_drops_the_table(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.update(lua_rw, by_chord(lua_rw.read())["super+w"], description="")
+        _, new = self.changed(before, self.binds(lua_rw).read_text())
+        assert new == ['hl.bind(mainMod .. " + W",     hl.dsp.exec_cmd(launchPrefix .. BROWSER))']
+
+    def test_an_inline_function_keeps_its_body_when_re_chorded(self, lua_rw):
+        editor.update(
+            lua_rw, by_chord(lua_rw.read())["super+minus"], chord=Chord.parse("Super+Equal")
+        )
+        found = by_chord(lua_rw.read())["super+equal"]
+        assert found.action == "lua function"
+        assert "zoom(-0.3)" in found.raw
+
+    def test_delete_removes_just_that_line(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.delete(lua_rw, by_chord(lua_rw.read())["super+left"])
+        old, new = self.changed(before, self.binds(lua_rw).read_text())
+        assert old == ['hl.bind(mainMod .. " + Left",        hl.dsp.focus({ direction = "left" }))']
+        assert new == []
+        assert "super+left" not in by_chord(lua_rw.read())
+
+    def test_a_bind_added_above_an_unbind_goes_below_it(self, lua_rw):
+        """The unbind would remove the new bind: Super+B is unbound in the fixture."""
+        editor.add(lua_rw, Chord.parse("Super+B"), "exec bee")
+        live = [s for s in lua_rw.read() if s.chord == Chord.parse("Super+B")]
+        assert [bool(s.extras.get("disabled")) for s in live] == [True, False]
+        text = self.binds(lua_rw).read_text()
+        assert text.index('hl.dsp.exec_cmd("bee")') > text.index("hl.unbind(")
+
+    def test_taking_a_chord_unbinds_the_holder(self, lua_rw):
+        victim = by_chord(lua_rw.read())["super+q"]
+        editor.take_over(lua_rw, victim, None, Chord.parse("Super+Q"), "exec foot")
+        held = [s for s in lua_rw.read() if s.chord == Chord.parse("Super+Q")]
+        assert [s.action for s in held] == ["exec foot"]
+
+    def test_undo_restores_the_file(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        editor.undo_last()
+        assert self.binds(lua_rw).read_text() == before
+
+    def test_a_bind_made_by_a_loop_cannot_be_edited_and_says_why(self, lua_rw):
+        generated = by_chord(lua_rw.read())["super+alt+code:11"]
+        with pytest.raises(editor.EditError, match="loop or helper"):
+            editor.update(lua_rw, generated, action="exec foot")
+        with pytest.raises(editor.EditError, match="binds.lua"):
+            editor.delete(lua_rw, generated)
         assert backup.list_snapshots() == []
 
-    def test_an_edit_of_a_stale_record_is_refused(self, lua_rw):
-        """A shortcut read before the Lua config appeared must not be written."""
-        conf = lua_rw._root / "hyprland.conf"
-        stale = lua_rw.parse(conf.read_text(), conf)[0]
-        with pytest.raises(editor.EditError, match="Lua"):
+    def test_an_action_it_cannot_spell_is_an_edit_error(self, lua_rw):
+        before = self.binds(lua_rw).read_text()
+        with pytest.raises(editor.EditError, match="isn't an action"):
+            editor.add(lua_rw, Chord.parse("Super+Y"), "just some words")
+        assert self.binds(lua_rw).read_text() == before
+
+    def test_a_file_changed_since_it_was_read_is_refused(self, lua_rw):
+        stale = by_chord(lua_rw.read())["super+q"]
+        path = self.binds(lua_rw)
+        path.write_text("-- a longer comment than before\n" + path.read_text())
+        with pytest.raises(editor.EditError, match="changed since"):
             editor.delete(lua_rw, stale)
 
 

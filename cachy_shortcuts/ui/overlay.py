@@ -327,9 +327,12 @@ class OverlayWindow(Gtk.ApplicationWindow):
         box.append(desc_label)
 
         # No source span means an app cheat-sheet entry, which this tool does
-        # not own. Saying so up front beats refusing after an edit is typed.
+        # not own -- or a Hyprland bind a loop generates. Saying so up front
+        # beats refusing after an edit is typed.
         if shortcut.source is None:
-            badge = Gtk.Label(label="reference")
+            badge = Gtk.Label(
+                label="generated" if shortcut.extras.get("generated") else "reference"
+            )
             badge.add_css_class("badge")
             box.append(badge)
 

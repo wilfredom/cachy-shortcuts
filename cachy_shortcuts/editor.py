@@ -91,6 +91,20 @@ def _write(snapshot: backup.Snapshot, path: Path, text: str) -> None:
         raise EditError(f"cannot write {path}: {exc}") from exc
 
 
+def _render(
+    backend: Backend,
+    chord: Chord,
+    action: str,
+    description: str = "",
+    extras: dict | None = None,
+) -> str:
+    """``backend.render``, with a binding it can't spell reported as an EditError."""
+    try:
+        return backend.render(chord, action, description, extras)
+    except ValueError as exc:
+        raise EditError(str(exc)) from exc
+
+
 def _insert(backend: Backend, text: str, rendered: str) -> str:
     """``text`` with a new binding placed where the backend wants it."""
     offset, prefix, suffix = backend.insertion_point(text)
@@ -226,7 +240,7 @@ def add(
 ) -> EditResult:
     path = _target_file(backend, None)
     text = read_for_edit(backend, path)
-    rendered = backend.render(chord, action, description)
+    rendered = _render(backend, chord, action, description)
     offset, prefix, suffix = backend.insertion_point(text)
     moved = backend.placement(path, offset, rendered)
     if moved is not None:
@@ -424,9 +438,13 @@ def _replace(
     operation: str,
 ) -> EditResult:
     if shortcut.source is None:
-        raise EditError("binding has no recorded source span")
+        raise EditError(
+            shortcut.extras.get("readonly_reason") or "binding has no recorded source span"
+        )
 
-    rendered = backend.render(new_chord, new_action, new_description, shortcut.extras)
+    rendered = _render(
+        backend, new_chord, new_action, new_description, shortcut.extras
+    )
 
     # A COSMIC default lives in a system file we must not touch; write an
     # override into the user's custom file instead of editing in place.
@@ -514,7 +532,9 @@ def _require_live_default(backend: Backend, shortcut: Shortcut) -> None:
 
 def delete(backend: Backend, shortcut: Shortcut) -> EditResult:
     if shortcut.source is None:
-        raise EditError("binding has no recorded source span")
+        raise EditError(
+            shortcut.extras.get("readonly_reason") or "binding has no recorded source span"
+        )
 
     # Removing a COSMIC default means recording an explicit Disable in custom.
     if shortcut.extras.get("readonly"):

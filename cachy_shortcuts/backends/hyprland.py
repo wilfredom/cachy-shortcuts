@@ -38,6 +38,7 @@ from pathlib import Path
 
 from .. import APP_IDS, RULE_MARKER
 from ..model import Chord, Shortcut, SourceRef, infer_category
+from . import _lua
 from .base import Backend, FloatRule, escape_regex
 
 # Flag letters Hyprland accepts after ``bind``. Spelled out rather than [a-z]*
@@ -177,6 +178,10 @@ class HyprlandBackend(Backend):
     name = "hyprland"
     display_name = "Hyprland"
 
+    @property
+    def line_comment(self) -> str:  # type: ignore[override]
+        return "--" if self.lua_config() is not None else "#"
+
     def __init__(self, config_root: Path | None = None) -> None:
         # HYPRLAND_CONFIG only applies to the default location: a caller that
         # names a root (the tests, a second machine's tree) means that root.
@@ -212,21 +217,12 @@ class HyprlandBackend(Backend):
         main = self.main_config()
         return main if main.suffix == ".lua" else None
 
-    def unsupported(self) -> str | None:
-        lua = self.lua_config()
-        if lua is None:
-            return None
-        return (
-            f"Hyprland loads {lua}, a Lua config; cachy-shortcuts only reads and "
-            "writes the hyprland.conf grammar, so it leaves Hyprland's bindings "
-            "alone (any hyprland.conf beside it is ignored by Hyprland)"
-        )
-
     def config_paths(self) -> list[Path]:
-        # Reading a .conf that Hyprland ignores would list binds that do
-        # nothing, and writing to it would report a success that isn't one.
+        # A hyprland.conf beside a hyprland.lua is ignored by Hyprland, so it
+        # is never listed: reading it would show binds that do nothing, and
+        # writing to it would report a success that isn't one.
         if self.lua_config() is not None:
-            return []
+            return self._lua_paths()
         out: list[Path] = []
         self._collect(self.main_config(), out, set())
         return out
@@ -312,6 +308,8 @@ class HyprlandBackend(Backend):
         A sourced file starts in whatever submap its ``source`` line was in:
         m_currentSubmap is one parser state, and handleSource keeps it.
         """
+        if path.suffix == ".lua":
+            return self._parse_lua(text, path)
         out: list[Shortcut] = []
         self._walk(text, path, out, self._file_variables(text), submap, None)
         return out
@@ -465,6 +463,8 @@ class HyprlandBackend(Backend):
         reaches every bind before it -- including one from the main file or
         an earlier include, which is the usual "overrides file" layout.
         """
+        if self.lua_config() is not None:
+            return self._read_lua()
         return self._load()
 
     def _load(self, trace: list | None = None) -> list[Shortcut]:
@@ -504,6 +504,8 @@ class HyprlandBackend(Backend):
         new bind in the main file loses again. Placed straight after the
         last such unbind, the new bind is the override it was meant to be.
         """
+        if self.lua_config() is not None:
+            return self._lua_placement(path, offset, rendered)
         trace: list[_Line] = []
         self._load(trace)
         variables = self.variables()
@@ -548,6 +550,8 @@ class HyprlandBackend(Backend):
         extras: dict | None = None,
     ) -> str:
         extras = extras or {}
+        if self.lua_config() is not None:
+            return self._render_lua(chord, action, description, extras)
         variables = self.variables()
 
         mods, key = self._spell_chord(chord, extras, variables)
@@ -635,6 +639,8 @@ class HyprlandBackend(Backend):
         fires inside that mode, which is a silent way for a new binding to
         appear to do nothing.
         """
+        if self.lua_config() is not None:
+            return self._lua_insertion_point(text)
         last_end = 0
         first_submap: int | None = None
         offset = 0
@@ -657,6 +663,458 @@ class HyprlandBackend(Backend):
             return (first_submap, "", "\n\n")
         prefix = "" if text.endswith("\n") or not text else "\n"
         return (len(text), prefix, "\n")
+
+    # --- Lua config ---------------------------------------------------------
+    #
+    # Hyprland 0.55+ loads hyprland.lua; see _lua.py for how it is read. A bind
+    # the scanner can place exactly (top-level, keys that fold to a string) is
+    # editable and carries its character span. A bind a loop or helper function
+    # generates is found by evaluating the config instead, and is listed with no
+    # span, which is what keeps the editor from rewriting the loop around it.
+
+    def _lua_tree(self) -> list[_LuaFile]:
+        """The config's Lua files in ``require`` order, each read once."""
+        entry = self.main_config()
+        root = entry.parent
+        files: list[_LuaFile] = []
+        seen: set[Path] = set()
+
+        def visit(path: Path) -> None:
+            key = _resolved(path)
+            if key in seen or not path.is_file():
+                return
+            seen.add(key)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return
+            toks = _lua.tokenize(text)
+            files.append(_LuaFile(path, text, toks))
+            for module in _lua.required_modules(toks):
+                target = _lua.resolve_module(root, module)
+                if target is not None:
+                    visit(target)
+
+        visit(entry)
+        return files
+
+    def notes(self) -> list[str]:
+        if self.lua_config() is None:
+            return []
+        if _lua.find_lua() is None:
+            return [
+                "`lua` was not found, so binds made by loops or helper functions "
+                "are not listed (install lua to see them)"
+            ]
+        entry = self.main_config()
+        result = _lua.evaluate(entry, entry.parent)
+        if result is None:
+            return [
+                "evaluating the Lua config failed or timed out; only binds that can "
+                "be placed by reading the files are listed"
+            ]
+        out = [f"error while evaluating: {e}" for e in result.errors]
+        if result.missing:
+            out.append("require() could not find: " + ", ".join(result.missing))
+        generated = sum(1 for s in self.read() if s.extras.get("generated"))
+        out.append(
+            f"evaluated with lua; {generated} bind(s) made by loops or helper "
+            "functions are listed read-only"
+        )
+        return out
+
+    def _lua_paths(self) -> list[Path]:
+        """Every Lua file of the config, the one new binds belong in first.
+
+        That is the file with the most top-level binds -- ``config/binds.lua``
+        in the CachyOS profile -- rather than ``hyprland.lua``, which only
+        requires the others.
+        """
+        files = self._lua_tree()
+        if not files:
+            return []
+        consts = _lua.constants([f.toks for f in files])
+        best, best_count = files[0].path, 0
+        for f in files:
+            count = sum(
+                1
+                for s in _lua.find_sites(f.text, f.toks, consts)
+                if s.kind == "bind" and s.top and not s.submap and s.keys is not None
+            )
+            if count > best_count:
+                best, best_count = f.path, count
+        return [best] + [f.path for f in files if f.path != best]
+
+    def _parse_lua(self, text: str, path: Path) -> list[Shortcut]:
+        """One Lua file's editable binds, from the text alone (no evaluation).
+
+        This is what validates a write, so it must be exactly what the file
+        says: binds a loop generates are not in it. Constants defined in the
+        config's other files still fold, as they do for ``read``.
+        """
+        toks = _lua.tokenize(text)
+        here = _resolved(path)
+        others = (
+            [f.toks for f in self._lua_tree() if _resolved(f.path) != here]
+            if self.lua_config() is not None
+            else []
+        )
+        consts = _lua.constants(others + [toks])
+        out: list[Shortcut] = []
+        for site, shortcut in self._lua_static(text, toks, path, consts):
+            if site.kind == "unbind" and site.keys is not None and not site.generated:
+                _apply_lua_unbind(
+                    out, site.keys, f"`hl.unbind({site.keys!r})` at {path}:{site.line}"
+                )
+            elif shortcut is not None:
+                out.append(shortcut)
+        return out
+
+    def _lua_static(
+        self, text: str, toks: list, path: Path, consts: dict[str, str]
+    ) -> list[tuple[_lua.Site, Shortcut | None]]:
+        """Every call in a file; a Shortcut for each bind that can be edited."""
+        super_var = next(
+            (n for n in _lua.top_level_names(toks) if consts.get(n) == "SUPER"), None
+        )
+        out: list[tuple[_lua.Site, Shortcut | None]] = []
+        for site in _lua.find_sites(text, toks, consts):
+            shortcut = None
+            if (
+                site.kind == "bind"
+                and not site.generated
+                and site.keys is not None
+                and len(site.args) >= 2
+            ):
+                shortcut = self._lua_shortcut(site, text, toks, path, consts, super_var)
+            out.append((site, shortcut))
+        return out
+
+    def _lua_shortcut(
+        self,
+        site: _lua.Site,
+        text: str,
+        toks: list,
+        path: Path,
+        consts: dict[str, str],
+        super_var: str | None,
+    ) -> Shortcut | None:
+        try:
+            chord = lua_chord(site.keys)
+        except (KeyError, ValueError):
+            return None
+        piece = lambda rng: text[slice(*_lua.span(toks, rng))]  # noqa: E731
+        arg_spans = [_lua.span(toks, rng) for rng in site.args]
+        seps = [
+            text[arg_spans[i][1] : arg_spans[i + 1][0]] for i in range(len(arg_spans) - 1)
+        ]
+        opts_raw = piece(site.args[2]) if len(site.args) > 2 else None
+        action = _lua.action_text(text, toks, site.args[1], consts)
+        description = _lua.opts_description(opts_raw, consts)
+        flags = _lua.flag_names(opts_raw)
+        return Shortcut(
+            chord=chord,
+            action=action,
+            description=description,
+            category=infer_category(action, description),
+            source=SourceRef(
+                backend=self.name,
+                path=path,
+                start=site.start,
+                end=site.end,
+                line=site.line,
+            ),
+            raw=text[site.start : site.end],
+            extras={
+                "lua": True,
+                "keys": site.keys,
+                "keys_raw": piece(site.args[0]),
+                "dsp_raw": piece(site.args[1]),
+                "opts_raw": opts_raw,
+                "action0": action,
+                "description0": description,
+                "head": text[site.start : arg_spans[0][0]],
+                "seps": seps,
+                "tail": text[arg_spans[-1][1] : site.end],
+                "flags": flags,
+                "super_var": super_var,
+                # submap_universal fires in every submap, the global one
+                # included, so it competes with global chords wherever it is.
+                "submap": "" if "submap_universal" in flags else site.submap,
+                "block": site.submap,
+            },
+        )
+
+    def _read_lua(self) -> list[Shortcut]:
+        """Every bind, in the order Hyprland evaluates them.
+
+        With ``lua`` available the config is evaluated: that fixes the order,
+        applies each ``hl.unbind``, and finds the binds loops and helpers make.
+        Without it only what the scanner can place is listed.
+        """
+        files = self._lua_tree()
+        if not files:
+            return []
+        consts = _lua.constants([f.toks for f in files])
+        per_file = {
+            _resolved(f.path): (
+                f,
+                self._lua_static(f.text, f.toks, f.path, consts),
+            )
+            for f in files
+        }
+        entry = self.main_config()
+        result = _lua.evaluate(entry, entry.parent)
+        if result is None:
+            return self._lua_static_walk(per_file, _resolved(files[0].path), entry.parent)
+        return self._lua_eval_walk(per_file, result)
+
+    def _lua_order(self, per_file: dict, start: Path, root: Path):
+        """Every call in the order Hyprland runs it: ``(file, site, shortcut)``.
+
+        A ``require``d file runs where its ``require`` is. Each file ends with
+        ``(file, None, None)`` so a position past its last call has a place.
+        """
+        done: set[Path] = set()
+
+        def walk(key: Path):
+            if key in done:
+                return
+            done.add(key)
+            file, items = per_file[key]
+            for site, shortcut in items:
+                if site.kind == "require":
+                    target = (
+                        None if site.generated else _lua.resolve_module(root, site.module)
+                    )
+                    if target is not None and _resolved(target) in per_file:
+                        yield from walk(_resolved(target))
+                else:
+                    yield file, site, shortcut
+            yield file, None, None
+
+        yield from walk(start)
+
+    def _lua_static_walk(self, per_file: dict, start: Path, root: Path) -> list[Shortcut]:
+        """The scanner's binds, a ``require``d file where its ``require`` is."""
+        out: list[Shortcut] = []
+        for file, site, shortcut in self._lua_order(per_file, start, root):
+            if site is None:
+                continue
+            if site.kind == "unbind":
+                if site.keys is not None and not site.generated:
+                    _apply_lua_unbind(
+                        out,
+                        site.keys,
+                        f"`hl.unbind({site.keys!r})` at {file.path}:{site.line}",
+                    )
+            elif shortcut is not None:
+                out.append(shortcut)
+        return out
+
+    def _lua_eval_walk(self, per_file: dict, result: _lua.EvalResult) -> list[Shortcut]:
+        out: list[Shortcut] = []
+        used: set[int] = set()
+        for rec in result.records:
+            home = per_file.get(_resolved(Path(rec.get("file", ""))))
+            line = int(rec.get("line") or 0)
+            site = shortcut = None
+            if home is not None:
+                for candidate, found in home[1]:
+                    if candidate.kind == rec["op"] and candidate.line <= line <= candidate.end_line:
+                        site, shortcut = candidate, found
+                        break
+            if rec["op"] == "unbind":
+                _apply_lua_unbind(
+                    out,
+                    rec["keys"],
+                    f"`hl.unbind({rec['keys']!r})` at {rec.get('file')}:{line}",
+                )
+                continue
+            if (
+                shortcut is not None
+                and id(site) not in used
+                and site.keys == rec["keys"]
+            ):
+                used.add(id(site))
+                shortcut.extras["dsp"] = rec.get("dsp")
+                out.append(shortcut)
+                continue
+            generated = self._lua_generated(rec, home[0] if home else None, site)
+            if generated is not None:
+                out.append(generated)
+        if result.errors:
+            # The config stopped partway: what the evaluator never reached is
+            # more likely still live than dead, so it is kept.
+            for _, items in per_file.values():
+                for site, shortcut in items:
+                    if shortcut is not None and id(site) not in used:
+                        out.append(shortcut)
+        return out
+
+    def _lua_generated(
+        self, rec: dict, file: _LuaFile | None, site: _lua.Site | None
+    ) -> Shortcut | None:
+        """A bind a loop or helper made: real, listed, but with nothing to edit."""
+        try:
+            chord = lua_chord(rec["keys"])
+        except (KeyError, ValueError):
+            return None
+        dsp = rec.get("dsp")
+        action = _lua_record_action(dsp)
+        opts = rec.get("opts") if isinstance(rec.get("opts"), dict) else {}
+        description = str(opts.get("description") or opts.get("desc") or "")
+        flags = sorted(k for k, v in opts.items() if v is True)
+        where = f"{rec.get('file', '?')}:{rec.get('line', 0)}"
+        raw = ""
+        if file is not None and site is not None:
+            raw = re.sub(r"\s+", " ", file.text[site.start : site.end])
+        block = str(rec.get("submap") or "")
+        return Shortcut(
+            chord=chord,
+            action=action,
+            description=description,
+            category=infer_category(action, description),
+            source=None,
+            raw=raw,
+            extras={
+                "lua": True,
+                "generated": True,
+                "readonly_reason": (
+                    "That binding is generated by a loop or helper function in your "
+                    f"Hyprland Lua config ({where}) — edit that code directly."
+                ),
+                "backend": self.name,
+                "where": where,
+                "keys": rec["keys"],
+                "dsp": dsp,
+                "flags": flags,
+                "submap": "" if "submap_universal" in flags else block,
+                "block": block,
+            },
+        )
+
+    # --- writing Lua ----------------------------------------------------------
+
+    def _render_lua(
+        self, chord: Chord, action: str, description: str, extras: dict
+    ) -> str:
+        """One ``hl.bind(...)`` call, reusing the original text of what didn't change.
+
+        An edit rebuilds the call from its own pieces -- head, the three
+        arguments, and the text between them -- so the alignment, ``mainMod ..``
+        and ``launchPrefix ..`` the user wrote survive an edit to a different
+        argument, byte for byte.
+        """
+        keys_raw, keys = extras.get("keys_raw"), extras.get("keys")
+        same_chord = False
+        if keys_raw is not None and keys is not None:
+            try:
+                same_chord = lua_chord(keys) == chord
+            except (KeyError, ValueError):
+                pass
+        if same_chord:
+            keys_expr = keys_raw
+        else:
+            keys_expr = _lua_keys_expr(
+                chord, extras.get("super_var", self._lua_super_var())
+            )
+
+        dsp_raw = extras.get("dsp_raw")
+        if dsp_raw is not None and action.strip() == extras.get("action0"):
+            dsp_expr = dsp_raw
+        else:
+            dsp_expr = _lua_dispatcher(action)
+
+        opts_raw = extras.get("opts_raw")
+        if description == extras.get("description0", ""):
+            opts_expr = opts_raw
+        else:
+            opts_expr = _lua.set_opts_description(opts_raw, description)
+
+        head = extras.get("head", "hl.bind(")
+        tail = extras.get("tail", ")")
+        seps = extras.get("seps") or [", ", ", "]
+        out = head + keys_expr + seps[0] + dsp_expr
+        if opts_expr:
+            out += (seps[1] if len(seps) > 1 else ", ") + opts_expr
+        return out + tail
+
+    def _lua_super_var(self) -> str | None:
+        """A name the write-target file defines as ``"SUPER"``, for new binds."""
+        paths = self._lua_paths()
+        if not paths:
+            return None
+        try:
+            text = paths[0].read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        toks = _lua.tokenize(text)
+        consts = _lua.constants([f.toks for f in self._lua_tree()])
+        return next((n for n in _lua.top_level_names(toks) if consts.get(n) == "SUPER"), None)
+
+    def _lua_insertion_point(self, text: str) -> tuple[int, str, str]:
+        """After the last file-level bind -- never inside a loop, function or submap."""
+        toks = _lua.tokenize(text)
+        anchor = None
+        for site in _lua.find_sites(text, toks, {}):
+            if site.kind == "bind" and site.top:
+                anchor = site
+        if anchor is not None:
+            newline = text.find("\n", anchor.end)
+            return (len(text) if newline == -1 else newline, "\n", "")
+        prefix = "" if text.endswith("\n") or not text else "\n"
+        return (len(text), prefix, "\n")
+
+    def _lua_placement(
+        self, path: Path, offset: int, rendered: str
+    ) -> tuple[Path, int, str, str] | None:
+        """After the last ``hl.unbind`` that would remove a bind put at path:offset.
+
+        The same trap as the ``.conf`` grammar: an ``unbind`` removes what ran
+        before it, so a new bind above one is silently undone.
+        """
+        probe = self._parse_lua(rendered, path)
+        if not probe or probe[0].extras.get("keys") is None:
+            return None
+        wanted = _lua_identity(probe[0].extras["keys"])
+        files = self._lua_tree()
+        if not files or wanted is None:
+            return None
+        consts = _lua.constants([f.toks for f in files])
+        per_file = {
+            _resolved(f.path): (f, self._lua_static(f.text, f.toks, f.path, consts))
+            for f in files
+        }
+        entry = self.main_config()
+        where = _resolved(path)
+        trace = list(self._lua_order(per_file, _resolved(files[0].path), entry.parent))
+        here = next(
+            (
+                i
+                for i, (file, site, _) in enumerate(trace)
+                if _resolved(file.path) == where
+                and (len(file.text) if site is None else site.start) >= offset
+            ),
+            None,
+        )
+        if here is None:
+            return None
+        last = None
+        for file, site, _ in trace[here:]:
+            if (
+                site is not None
+                and site.kind == "unbind"
+                and not site.generated
+                and site.keys is not None
+                and _lua_identity(site.keys) == wanted
+            ):
+                last = (file, site)
+        if last is None:
+            return None
+        file, site = last
+        newline = file.text.find("\n", site.end)
+        return (file.path, len(file.text) if newline == -1 else newline, "\n", "")
 
     # --- tiling exception ---------------------------------------------------
 
@@ -982,3 +1440,100 @@ def _parse_version(output: str | None) -> tuple[int, int] | None:
         if m:
             return (int(m.group(1)), int(m.group(2)))
     return None
+
+
+# --- Lua helpers -----------------------------------------------------------
+
+
+@dataclass
+class _LuaFile:
+    path: Path
+    text: str
+    toks: list
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def lua_chord(keys: str) -> Chord:
+    """A Lua bind's keys string -- ``"SUPER + SHIFT + Left"`` -- as a Chord."""
+    parts = [p.strip() for p in keys.split("+") if p.strip()]
+    if not parts:
+        raise ValueError(f"empty keys: {keys!r}")
+    mods: list[str] = []
+    for part in parts[:-1]:
+        mods.extend(split_mods(part))
+    return Chord.from_parts(mods, parts[-1])
+
+
+def _lua_identity(keys: str) -> tuple | None:
+    """What ``hl.unbind`` compares: the modmask and the exact key, as for ``unbind =``."""
+    parts = [p.strip() for p in keys.split("+") if p.strip()]
+    if not parts:
+        return None
+    return (_modmask(" ".join(parts[:-1])), _key_identity(parts[-1]))
+
+
+def _apply_lua_unbind(earlier: list[Shortcut], keys: str, where: str) -> None:
+    wanted = _lua_identity(keys)
+    if wanted is None:
+        return
+    for shortcut in earlier:
+        if shortcut.extras.get("disabled"):
+            continue
+        have = shortcut.extras.get("keys")
+        if have is not None and _lua_identity(have) == wanted:
+            shortcut.extras["disabled"] = True
+            shortcut.extras["disabled_by"] = where
+
+
+def _lua_record_action(dsp) -> str:
+    """The action text for a bind the evaluator saw (see ``_lua.action_text``)."""
+    if not isinstance(dsp, dict):
+        return ""
+    if "__dsp" not in dsp:
+        return "lua function"
+    args = dsp.get("args") or []
+    if dsp["__dsp"] == "exec_cmd" and len(args) == 1 and isinstance(args[0], str):
+        return f"exec {args[0]}"
+    return _lua.format_dsp(dsp)
+
+
+def _lua_keys_expr(chord: Chord, super_var: str | None) -> str:
+    """The keys argument for a new bind, written the way CachyOS's own are.
+
+    ``mainMod .. " + Q"`` when the file defines a name for the super key,
+    otherwise a plain ``"SUPER + Q"``.
+    """
+    parts = [_HYPR_MOD_SPELLING.get(m, m.upper()) for m in chord.mods]
+    parts.append(_hypr_key_spelling(chord.key))
+    if super_var and parts[0] == "SUPER" and len(parts) > 1:
+        return f'{super_var} .. {_lua.lua_string(" + " + " + ".join(parts[1:]))}'
+    return _lua.lua_string(" + ".join(parts))
+
+
+_DSP_CALL_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*\(.*\)$", re.DOTALL)
+
+
+def _lua_dispatcher(action: str) -> str:
+    """An action as the dispatcher argument of ``hl.bind``.
+
+    ``exec firefox`` is the form every backend shares for "run this", so it is
+    what the edit form and ``add`` produce; ``window.close()`` is a dispatcher
+    as ``read`` shows it, and ``hl.dsp...`` is already source.
+    """
+    text = action.strip()
+    if text.startswith("exec ") and text[5:].strip():
+        return f"hl.dsp.exec_cmd({_lua.lua_string(text[5:].strip())})"
+    if text.startswith("hl."):
+        return text
+    if _DSP_CALL_RE.match(text):
+        return f"hl.dsp.{text}"
+    raise ValueError(
+        f"{action!r} isn't an action Hyprland's Lua config can bind; use a command "
+        "(exec firefox) or a dispatcher such as window.close()"
+    )

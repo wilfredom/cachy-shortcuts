@@ -117,6 +117,10 @@ class Backend(ABC):
         """
         return None
 
+    def notes(self) -> list[str]:
+        """Lines for ``doctor`` about how this config is being read, if notable."""
+        return []
+
     def is_installed(self) -> bool:
         """Whether this compositor appears to exist on the system at all."""
         return bool(shutil.which(self.name)) or any(

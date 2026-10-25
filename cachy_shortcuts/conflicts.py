@@ -24,16 +24,30 @@ class Conflict:
     def owners(self) -> list[str]:
         seen: list[str] = []
         for s in self.shortcuts:
-            label = s.owner or (s.source.backend if s.source else "unknown")
+            label = s.owner or _backend(s) or "unknown"
             if label not in seen:
                 seen.append(label)
         return seen
 
     def describe(self) -> str:
         where = ", ".join(
-            f"{s.source.location}" if s.source else "?" for s in self.shortcuts
+            s.source.location if s.source else s.extras.get("where", "?")
+            for s in self.shortcuts
         )
         return f"{self.chord.display()} claimed {len(self.shortcuts)}x: {where}"
+
+
+def _backend(shortcut: Shortcut) -> str:
+    """Which compositor holds ``shortcut``.
+
+    A bind with no source span is normally an app cheat sheet, which belongs
+    to no compositor. Hyprland's Lua loops and helpers are the exception:
+    they are real binds that just have no single span to edit, and say whose
+    they are in ``extras``.
+    """
+    if shortcut.source:
+        return shortcut.source.backend
+    return shortcut.extras.get("backend", "")
 
 
 def _scope(shortcut: Shortcut) -> tuple[str, str, str]:
@@ -44,7 +58,7 @@ def _scope(shortcut: Shortcut) -> tuple[str, str, str]:
     fire at the same time and are not in conflict.
     """
     return (
-        shortcut.source.backend if shortcut.source else "",
+        _backend(shortcut),
         shortcut.extras.get("submap") or "",
         shortcut.chord.canonical,
     )
