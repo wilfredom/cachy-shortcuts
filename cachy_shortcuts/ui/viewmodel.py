@@ -237,6 +237,14 @@ class OverlayModel:
         self._record(target)
         return target
 
+    def request_reset(self) -> Shortcut | None:
+        """The selected binding, if it is one that can be put back (^Z)."""
+        target = self.current()
+        if target is None or self._refuse_if_readonly(target):
+            return None
+        self.status = ""
+        return target
+
     def begin_add(self, command: str = "") -> bool:
         """Start a brand-new binding, independent of the current selection."""
         self.draft = BindingDraft.for_new(self.shortcuts, self.apps, command=command)

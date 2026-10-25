@@ -22,7 +22,16 @@ from __future__ import annotations
 from . import _layershell
 from ._layershell import Gdk, Gio, GLib, Gtk, LayerShell
 
-from .. import APP_ID, WINDOW_TITLE, appscan, cheatsheets, detect, editor, theming
+from .. import (
+    APP_ID,
+    WINDOW_TITLE,
+    appscan,
+    cheatsheets,
+    detect,
+    editor,
+    labels,
+    theming,
+)
 from ..backends.base import NotRunnable
 from .binding_form import BindingForm
 from .style import stylesheet
@@ -78,6 +87,7 @@ class OverlayWindow(Gtk.ApplicationWindow):
             app_id = None
         self.model.app_context = app_id
         shortcuts = self.backend.read()
+        labels.annotate(shortcuts)
         shortcuts.extend(cheatsheets.load_for(app_id))
         self.model.set_shortcuts(shortcuts)
 
@@ -437,6 +447,9 @@ class OverlayWindow(Gtk.ApplicationWindow):
         if ctrl and name.lower() == "r":
             self._run_selected()
             return True
+        if ctrl and name.lower() == "z":
+            self._reset_selected()
+            return True
         if ctrl and name.lower() == "n":
             self.model.begin_add()
             self._render()
@@ -475,6 +488,22 @@ class OverlayWindow(Gtk.ApplicationWindow):
         # A beat after the overlay is gone, so "close window" or a focus change
         # lands on the window you came from rather than on the overlay.
         GLib.timeout_add(150, self._finish_run, target)
+
+    def _reset_selected(self) -> None:
+        """^Z: put the selected binding back how it was before it was edited."""
+        target = self.model.request_reset()
+        if target is None or self.backend is None:
+            self._render()  # the status line says why not
+            return
+        try:
+            result = editor.reset(self.backend, target)
+        except editor.EditError as exc:
+            self.model.status = str(exc)
+        else:
+            now = result.chord.display() if result.chord else target.chord.display()
+            self.model.status = f"Reset {target.chord.display()} → {now}"
+            self._reload()
+        self._render()
 
     def _finish_run(self, target) -> bool:
         try:

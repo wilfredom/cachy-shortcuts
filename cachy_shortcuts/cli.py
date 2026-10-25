@@ -21,6 +21,7 @@ from . import (
     detect,
     editor,
     floatrule,
+    labels,
     usage,
 )
 from .backends.base import Backend, NotRunnable
@@ -76,6 +77,8 @@ def cmd_list(args) -> int:
         if reason:
             print(f"warning: {reason}", file=sys.stderr)
     collected: list[tuple[Backend, list[Shortcut]]] = [(b, b.read()) for b in backends]
+    for _, shortcuts in collected:
+        labels.annotate(shortcuts)
 
     # One filter for both output modes, so a script sees what a person sees.
     query = (args.query or "").strip().lower()
@@ -346,6 +349,41 @@ def cmd_reset(args) -> int:
     return 0
 
 
+def cmd_label(args) -> int:
+    backends = _resolve_backends(args)
+    if args.generate:
+        shortcuts = [s for b in backends for s in b.read()]
+        try:
+            result = labels.generate(shortcuts, dry_run=args.dry_run)
+        except labels.LabelError as exc:
+            _die(str(exc))
+        if args.dry_run:
+            print(f"{result.count} action(s) to label, prompt {result.prompt_chars} chars")
+        else:
+            print(f"{_c('labelled', ACCENT)} {result.count} action(s)")
+        return 0
+    if not args.chord:
+        _die("give a chord, or pass --generate")
+    if len(backends) > 1:
+        _die("multiple compositors found; pick one with --backend")
+    try:
+        chord = Chord.parse(args.chord)
+    except (KeyError, ValueError) as exc:
+        _die(f"bad chord {args.chord!r}: {exc}")
+    target = conflicts.claimant(chord, backends[0].read())
+    if target is None:
+        _die(f"{chord.display()} is not bound in {backends[0].display_name}")
+    if args.remove:
+        done = labels.remove(target.action)
+        print("Label removed." if done else "No stored label for that binding.")
+        return 0 if done else 1
+    if not args.text:
+        _die("give the label text, or pass --remove")
+    labels.set_user(target.action, args.text)
+    print(f"{_c('labelled', ACCENT)} {chord.display()} → {args.text}")
+    return 0
+
+
 def cmd_run(args) -> int:
     backends = _resolve_backends(args)
     if len(backends) > 1:
@@ -536,6 +574,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_backend_flags(p_reset)
     p_reset.set_defaults(func=cmd_reset)
+
+    p_label = sub.add_parser(
+        "label", help="give a binding a friendly name, or generate them in one pass"
+    )
+    p_label.add_argument("chord", nargs="?", help="the chord to label")
+    p_label.add_argument("text", nargs="?", help="the label")
+    p_label.add_argument("--remove", action="store_true", help="drop its stored label")
+    p_label.add_argument(
+        "--generate",
+        action="store_true",
+        help="label every unlabelled action with one `claude -p` Haiku call",
+    )
+    p_label.add_argument(
+        "--dry-run", action="store_true", help="with --generate: count, don't call"
+    )
+    add_backend_flags(p_label)
+    p_label.set_defaults(func=cmd_label)
 
     p_run = sub.add_parser("run", help="do what a binding does, without pressing it")
     p_run.add_argument("chord")
