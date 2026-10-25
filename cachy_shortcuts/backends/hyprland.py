@@ -1,4 +1,8 @@
-"""Hyprland backend -- hyprlang ``bind = `` grammar.
+"""Hyprland backend -- hyprlang ``bind = `` grammar, and the Lua config.
+
+Hyprland 0.55+ loads ``hyprland.lua`` in preference to ``hyprland.conf``; that
+grammar (``hl.bind(keys, dispatcher, opts)``) is read by ``_lua.py`` and the
+"Lua config" methods below. Everything in this docstring is the ``.conf`` form.
 
     $mainMod = SUPER
     bind  = $mainMod, Return, exec, kitty
@@ -39,7 +43,7 @@ from pathlib import Path
 from .. import APP_IDS, RULE_MARKER
 from ..model import Chord, Shortcut, SourceRef, infer_category
 from . import _lua
-from .base import Backend, FloatRule, escape_regex
+from .base import Backend, FloatRule, NotRunnable, escape_regex
 
 # Flag letters Hyprland accepts after ``bind``. Spelled out rather than [a-z]*
 # so an unrelated key that merely starts with "bind" isn't parsed as one.
@@ -1178,6 +1182,40 @@ class HyprlandBackend(Backend):
 
     def reload(self) -> None:
         self._run(["hyprctl", "reload"])
+
+    def run_command(self, shortcut: Shortcut) -> list[str]:
+        """``hyprctl`` calling the same dispatcher the bind does.
+
+        A Lua config takes Lua (``hyprctl eval``); built from the evaluated
+        call when there is one, so nothing refers to a ``local`` the running
+        compositor can't see. A ``.conf`` takes ``hyprctl dispatch``.
+        """
+        keys = shortcut.chord.display()
+        if shortcut.extras.get("disabled"):
+            raise NotRunnable(f"{keys} has been unbound, so there is nothing to run")
+        if shortcut.source is None and not shortcut.extras.get("generated"):
+            raise NotRunnable(f"{keys} isn't one of your Hyprland bindings")
+        if shortcut.chord.key.startswith("mouse:"):
+            raise NotRunnable(f"{keys} is a mouse drag; it can't be run from here")
+        if shortcut.extras.get("lua"):
+            return ["hyprctl", "eval", f"hl.dispatch({self._lua_run_expr(shortcut)})"]
+        dispatcher, _, params = shortcut.action.partition(" ")
+        return ["hyprctl", "dispatch", dispatcher, *([params.strip()] if params.strip() else [])]
+
+    @staticmethod
+    def _lua_run_expr(shortcut: Shortcut) -> str:
+        dsp = shortcut.extras.get("dsp")
+        if isinstance(dsp, dict) and "__dsp" in dsp:
+            return "hl.dsp." + _lua.format_dsp(dsp)
+        if shortcut.action == "lua function" or (isinstance(dsp, dict) and dsp.get("__fn")):
+            raise NotRunnable(
+                f"{shortcut.chord.display()} runs a Lua function from your config, and "
+                "Hyprland gives no way to trigger that from outside — press the keys"
+            )
+        try:
+            return _lua_dispatcher(shortcut.action)
+        except ValueError as exc:
+            raise NotRunnable(str(exc)) from exc
 
     def focused_window(self) -> str | None:
         out = self._run(["hyprctl", "-j", "activewindow"])

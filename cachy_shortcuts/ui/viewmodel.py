@@ -12,6 +12,7 @@ from enum import Enum, auto
 
 from .. import usage
 from ..appscan import DesktopApp
+from ..backends.base import NotRunnable
 from ..model import Category, Shortcut
 from .form_model import BindingDraft
 
@@ -207,6 +208,35 @@ class OverlayModel:
             return True
         return False
 
+    _NO_RUN_STATUS = (
+        "That's a reference shortcut from an app cheat sheet — "
+        "nothing in your compositor to run."
+    )
+
+    def request_run(self, check) -> Shortcut | None:
+        """The selected binding, if it can be triggered from here (^R).
+
+        ``check`` is the backend's ``run_command``: called only to learn
+        whether the binding can run, so a refusal is reported in the status
+        line before the overlay closes. The caller closes the overlay and
+        then runs it, so a window action reaches the window you came from.
+        """
+        target = self.current()
+        if target is None:
+            return None
+        if target.source is None and not target.extras.get("generated"):
+            self.status = self._NO_RUN_STATUS
+            return None
+        try:
+            check(target)
+        except NotRunnable as exc:
+            self.status = str(exc)
+            return None
+        self.status = ""
+        # Running it from here is not having it memorised, same as looking it up.
+        self._record(target)
+        return target
+
     def begin_add(self, command: str = "") -> bool:
         """Start a brand-new binding, independent of the current selection."""
         self.draft = BindingDraft.for_new(self.shortcuts, self.apps, command=command)
@@ -265,7 +295,7 @@ class OverlayModel:
             return self.draft.hint()
         if self.mode is Mode.CONFIRM_DELETE:
             return "y delete · esc cancel"
-        return "↑↓ move · enter edit · ^n new · ^d delete · esc close"
+        return "↑↓ move · enter edit · ^r run · ^n new · ^d delete · esc close"
 
     def header(self) -> str:
         if self.app_context:

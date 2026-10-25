@@ -23,6 +23,7 @@ from . import _layershell
 from ._layershell import Gdk, Gio, GLib, Gtk, LayerShell
 
 from .. import APP_ID, WINDOW_TITLE, appscan, cheatsheets, detect, editor, theming
+from ..backends.base import NotRunnable
 from .binding_form import BindingForm
 from .style import stylesheet
 from .viewmodel import Mode, OverlayModel, RowKind
@@ -433,6 +434,9 @@ class OverlayWindow(Gtk.ApplicationWindow):
             else:
                 self._render()  # a status may have been set (reference rows)
             return True
+        if ctrl and name.lower() == "r":
+            self._run_selected()
+            return True
         if ctrl and name.lower() == "n":
             self.model.begin_add()
             self._render()
@@ -457,6 +461,27 @@ class OverlayWindow(Gtk.ApplicationWindow):
         else:
             self.model.move_to_edge(1)
         self._refresh_selection()
+
+    def _run_selected(self) -> None:
+        """^R: do what the selected binding does."""
+        if self.backend is None:
+            self._render()
+            return
+        target = self.model.request_run(self.backend.run_command)
+        if target is None:
+            self._render()  # the status line says why not
+            return
+        self.close_overlay()
+        # A beat after the overlay is gone, so "close window" or a focus change
+        # lands on the window you came from rather than on the overlay.
+        GLib.timeout_add(150, self._finish_run, target)
+
+    def _finish_run(self, target) -> bool:
+        try:
+            self.backend.run(target)
+        except NotRunnable:
+            pass  # checked before the overlay closed; a late failure has nowhere to show
+        return False  # one shot
 
     def _unwrap(self, action: str) -> str | None:
         if self.backend is None:

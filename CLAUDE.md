@@ -30,8 +30,9 @@ cachy-shortcuts undo        # roll back the most recent write
 
 ## Environment limits when working here
 
-This repo is usually edited in a container with **no Wayland session and no
-GTK4/PyGObject**, so `cachy_shortcuts/ui/overlay.py`, `binding_form.py`,
+This repo is sometimes edited in a container with **no Wayland session and no
+GTK4/PyGObject** (on a real CachyOS machine the overlay *can* be constructed
+and its key handlers driven without presenting it), so `cachy_shortcuts/ui/overlay.py`, `binding_form.py`,
 `chord_field.py` and `_layershell.py` cannot be imported or executed — only
 `py_compile`d. That constraint is the reason for the architecture below, and
 changes to those four files have to be verified by hand on a real machine
@@ -86,9 +87,33 @@ float, class:` (0.45–0.52) or `windowrulev2` below that. Unknown version ⇒
 newest grammar. A second trap: 0.55+ loads `hyprland.lua` in preference to
 `hyprland.conf` (CachyOS's Hyprland + Noctalia profile ships Lua).
 `main_config()` resolves like Hyprland does (`HYPRLAND_CONFIG`, then `.lua`,
-then `.conf`); when it is Lua, `unsupported()` names the file, nothing is
-read, and the editor refuses every write rather than editing an ignored
-`.conf`.
+then `.conf`) and `lua_config()` says which one it is; a `.conf` beside a
+`.lua` is ignored, never read or written.
+
+The Lua path lives in `backends/_lua.py` and `HyprlandBackend`'s "Lua config"
+sections, and is two tools because each answers a different question. The
+**scanner** (`tokenize` / `find_sites` / `constants`) finds every `hl.bind`,
+`hl.unbind` and `require` with exact character spans and folds string
+constants across files — it is a scanner, not a Lua parser, for the same
+reason as `_kdl.py`. A bind it can place (file level, keys fold to a string)
+is editable and carries a `SourceRef`. The **evaluator** runs the config under
+`lua` with `hl` stubbed (no `io`, `require` confined to the config dir,
+timeout) and reports what actually executed; that is the only way to see binds
+made by loops or helper functions, which are listed with `source=None` and
+`extras["generated"]` and therefore refused by the editor with
+`extras["readonly_reason"]`. `parse(text, path)` stays pure and static (it is
+what `_commit` validates with, dispatching on the `.lua` suffix); `read()`
+joins the two. No `lua` ⇒ `read()` falls back to the scanner and `doctor`
+says so (`Backend.notes()`). `hyprctl binds -j` is not a data source under
+Lua: every dispatcher is `__lua` and `code:N` binds report an empty key.
+Lua `hl.dsp.exec_cmd(x)` is surfaced as the action `exec x` so wrapping,
+unwrapping and owner detection need no Lua special case.
+
+`Backend.run_command()` / `run()` trigger a binding from outside (Hyprland
+only: `hyprctl eval "hl.dispatch(...)"` built from the evaluated dispatcher, or
+`hyprctl dispatch` for a `.conf`); everything else raises `NotRunnable`. Inline
+Lua functions and mouse drags can't be triggered, and no key-injection tool is
+assumed.
 
 Round-tripping matters: `extras` carries what a backend must not lose across an
 edit (niri's `allow-when-locked`, mango's `bind` flags, Hyprland's `bindd` form
@@ -201,7 +226,8 @@ compositor, then everything installed — so a subcommand should never call
   surfaced by focused app id. These have no `SourceRef` and must stay
   uneditable.
 - `usage.py` — learning mode counts *lookups*, not presses: the tool never
-  executes a shortcut, so it can't count firings. Local disk only.
+  sees a shortcut fire, so it can't count firings. Running one from the
+  overlay (^R / `run`) counts as a lookup. Local disk only.
 - `install.py` / `floatrule.py` — the tool's own hotkey and the per-compositor
   tiling exception, both written through the same snapshot/rollback path and
   both idempotent via a marker comment.

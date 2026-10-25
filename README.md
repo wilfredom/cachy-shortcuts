@@ -95,7 +95,7 @@ writes a float rule per compositor, matched on the overlay's app id
 | Compositor | Rule |
 |---|---|
 | Niri | a `window-rule` with `open-floating true` in `config.kdl` |
-| Hyprland | `windowrule = float on, match:class ^(...)$` in `hyprland.conf` |
+| Hyprland | `windowrule = float on, match:class ^(...)$` in `hyprland.conf`, or an `hl.window_rule` in `hyprland.lua` |
 | MangoWM | `windowrule=isfloating:1,...` in `config.conf` |
 | COSMIC | a tiling exception in `com.system76.CosmicSettings.WindowRules/v1/tiling_exception_custom` |
 
@@ -120,6 +120,7 @@ open the overlay. From there:
 | Type anything | Search chord, description, or command |
 | `↑` / `↓` | Move selection (`PgUp`/`PgDn`, `Home`/`End` too) |
 | `Enter` | Edit the selected binding |
+| `Ctrl+R` | Run the selected binding (Hyprland), instead of pressing its keys |
 | `Ctrl+N` | Add a new binding |
 | `Ctrl+D` | Delete the selected binding, `y` to confirm |
 | `Esc` | Clear the search, or close the overlay if it's already empty |
@@ -173,6 +174,7 @@ cachy-shortcuts conflicts               # just the conflicts
 cachy-shortcuts add "Super+N" --app Obsidian
 cachy-shortcuts add "Super+B" firefox --force  # unbind whatever holds it first
 cachy-shortcuts rm "Super+N"
+cachy-shortcuts run "Super+Space"       # do what a binding does, without pressing it (Hyprland)
 cachy-shortcuts undo                    # revert the most recent change
 cachy-shortcuts undo --force            # ...even if the file changed since (keeps a copy)
 cachy-shortcuts restore --list          # every snapshot, for anything older
@@ -225,6 +227,20 @@ cheat sheet to match.
   with a description stays a `bindd`. Binds inside a `submap` are shown and
   tagged, and their chords are compared only against that submap — a resize
   mode reusing `Super+H` is not a conflict.
+- **Hyprland's Lua config is read and written.** Hyprland 0.55+ loads
+  `hyprland.lua` over `hyprland.conf` (CachyOS ships the Lua profile), and any
+  `hyprland.conf` beside it is ignored here too. Binds are found by scanning the
+  files for `hl.bind(...)`, so an edit changes only that call's keys, action or
+  `description` option — `mainMod ..` and `launchPrefix ..` survive. Binds a
+  `for` loop or helper function generates (the workspace digits, say) can't be
+  found by reading, so the config is also run under `lua` with `hl` stubbed
+  out — no `io`, `require` limited to your config directory, a timeout — and
+  those binds are listed **read-only**: edit the loop itself. Without `lua`
+  they are simply not listed (`doctor` says which). Inline `function() … end`
+  binds can have their keys changed but not their body.
+- **Running a binding** asks the compositor to do what it does, through
+  `hyprctl eval` (Lua) or `hyprctl dispatch` (`.conf`). Inline Lua functions
+  and mouse drags can't be triggered from outside; press the keys for those.
 - **Your shell is detected, not assumed.** Hyprland is run bare as often as
   it's run under Noctalia, so `install-hotkey` and `doctor` report which shell
   (if any) they found, and the overlay takes its colours from that one.

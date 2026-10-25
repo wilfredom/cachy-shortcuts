@@ -699,3 +699,114 @@ class TestCrossBackendAgreement:
         chord = Chord.parse("Super+Return")
         for backend in all_backends:
             assert chord.canonical in by_chord(backend.read()), backend.name
+
+
+def _fake_subprocess(run):
+    """Stands in for the ``subprocess`` name in backends.base only.
+
+    Patching ``subprocess.run`` itself would also replace it for everything
+    else that shells out, such as the Lua evaluator reading the config.
+    """
+    import subprocess
+    import types
+
+    return types.SimpleNamespace(run=run, SubprocessError=subprocess.SubprocessError)
+
+
+class TestHyprlandRun:
+    """Triggering a binding without pressing it: the hyprctl command it becomes."""
+
+    needs_lua = pytest.mark.skipif(shutil.which("lua") is None, reason="no lua")
+
+    @staticmethod
+    def command(backend, chord):
+        return backend.run_command(by_chord(backend.read())[chord])
+
+    def test_an_exec_bind_runs_as_the_resolved_command(self, hyprland_lua):
+        assert self.command(hyprland_lua, "super+return") == [
+            "hyprctl",
+            "eval",
+            'hl.dispatch(hl.dsp.exec_cmd("uwsm app -- kitty"))',
+        ]
+
+    def test_a_dispatcher_with_a_table_argument_runs_as_written(self, hyprland_lua):
+        assert self.command(hyprland_lua, "super+alt+space")[2] == (
+            'hl.dispatch(hl.dsp.window.float({ action = "toggle" }))'
+        )
+
+    @needs_lua
+    def test_a_loop_generated_bind_runs_with_its_values_filled_in(self, hyprland_lua):
+        # `focus({ workspace = i })` -- i is gone by the time the compositor sees it
+        assert self.command(hyprland_lua, "super+alt+code:11")[2] == (
+            "hl.dispatch(hl.dsp.focus({ workspace = 2 }))"
+        )
+
+    @needs_lua
+    def test_a_helper_built_bind_uses_the_evaluated_globals(self, hyprland_lua):
+        assert self.command(hyprland_lua, "super+shift+code:10")[2] == (
+            'hl.dispatch(hl.dsp.window.move({ monitor = "HDMI-A-1" }))'
+        )
+
+    def test_an_inline_lua_function_cannot_be_run_and_says_so(self, hyprland_lua):
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        with pytest.raises(NotRunnable, match="Lua function"):
+            self.command(hyprland_lua, "super+minus")
+
+    def test_a_mouse_drag_cannot_be_run(self, hyprland_lua):
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        with pytest.raises(NotRunnable, match="mouse"):
+            self.command(hyprland_lua, "super+mouse:272")
+
+    def test_an_unbound_bind_cannot_be_run(self, hyprland_lua):
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        with pytest.raises(NotRunnable, match="unbound"):
+            self.command(hyprland_lua, "super+b")
+
+    def test_a_conf_bind_runs_through_dispatch(self, hyprland_vanilla):
+        found = by_chord(hyprland_vanilla.read())
+        exec_bind = next(s for s in found.values() if s.action.startswith("exec "))
+        command = hyprland_vanilla.run_command(exec_bind)
+        assert command[:3] == ["hyprctl", "dispatch", "exec"]
+        assert command[3] == exec_bind.action[len("exec ") :]
+        kill = next(s for s in found.values() if s.action.strip() == "killactive")
+        assert hyprland_vanilla.run_command(kill) == ["hyprctl", "dispatch", "killactive"]
+
+    def test_a_compositor_with_no_way_in_says_so(self, niri):
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        with pytest.raises(NotRunnable, match="can't be run"):
+            niri.run_command(niri.read()[0])
+
+    def test_hyprctl_refusing_the_call_is_reported(self, hyprland_lua, monkeypatch):
+        import subprocess
+
+        from cachy_shortcuts.backends import base
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 7, "error: attempt to index a nil value\n", "")
+
+        target = by_chord(hyprland_lua.read())["super+q"]
+        monkeypatch.setattr(base, "subprocess", _fake_subprocess(fake))
+        with pytest.raises(NotRunnable, match="attempt to index"):
+            hyprland_lua.run(target)
+        assert seen[0][:2] == ["hyprctl", "eval"]
+
+    def test_a_clean_ok_is_not_an_error(self, hyprland_lua, monkeypatch):
+        import subprocess
+
+        from cachy_shortcuts.backends import base
+
+        target = by_chord(hyprland_lua.read())["super+q"]
+        monkeypatch.setattr(
+            base,
+            "subprocess",
+            _fake_subprocess(lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "ok\n", "")),
+        )
+        hyprland_lua.run(target)

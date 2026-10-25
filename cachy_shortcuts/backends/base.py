@@ -91,6 +91,10 @@ class FloatRule:
         return self.marker in text and self.body.strip() in text
 
 
+class NotRunnable(Exception):
+    """A binding can't be triggered from here; the message says why."""
+
+
 class Backend(ABC):
     """One compositor's config format."""
 
@@ -238,6 +242,27 @@ class Backend(ABC):
 
     def reload(self) -> None:
         """Ask the compositor to re-read its config. Default: nothing to do."""
+
+    def run_command(self, shortcut: Shortcut) -> list[str]:
+        """The command that does what ``shortcut`` does, without pressing it.
+
+        Raises ``NotRunnable`` when this compositor offers no way in, or when
+        this particular binding can't be triggered from outside.
+        """
+        raise NotRunnable(f"{self.display_name} bindings can't be run from here")
+
+    def run(self, shortcut: Shortcut) -> None:
+        """Trigger ``shortcut`` in the running compositor."""
+        command = self.run_command(shortcut)
+        try:
+            proc = subprocess.run(
+                command, capture_output=True, text=True, timeout=5.0, check=False
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise NotRunnable(f"could not run {command[0]}: {exc}") from exc
+        out = (proc.stdout + proc.stderr).strip()
+        if proc.returncode != 0 or out.lower().startswith("error"):
+            raise NotRunnable(out.splitlines()[0] if out else f"{command[0]} failed")
 
     def focused_window(self) -> str | None:
         """app_id of the window focused before the overlay opened, if knowable."""

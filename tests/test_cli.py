@@ -488,3 +488,35 @@ class TestActionLabels:
     def test_long_commands_are_truncated(self):
         action = "spawn " + " ".join(["averylongargument"] * 10)
         assert len(describe_action(action)) <= 52
+
+
+class TestRun:
+    @pytest.fixture
+    def ran(self, monkeypatch):
+        from cachy_shortcuts.backends.base import Backend
+
+        seen = []
+        monkeypatch.setattr(Backend, "run", lambda self, shortcut: seen.append(shortcut))
+        return seen
+
+    def test_runs_the_binding_on_that_chord(self, env, ran, capsys):
+        assert cli.main(["run", "Super+Return", "--backend", "hyprland"]) == 0
+        assert [s.chord.canonical for s in ran] == ["super+return"]
+        assert "ran" in capsys.readouterr().out
+
+    def test_counts_as_a_lookup(self, env, ran):
+        from cachy_shortcuts import usage
+
+        cli.main(["run", "Super+Return", "--backend", "hyprland"])
+        assert usage._load()["lookups"]["super+return"]["count"] == 1
+
+    def test_an_unbound_chord_is_an_error(self, env, ran, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["run", "Super+F11", "--backend", "hyprland"])
+        assert "not bound" in capsys.readouterr().err
+        assert ran == []
+
+    def test_a_binding_that_cannot_run_exits_with_the_reason(self, env, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["run", "Super+Return", "--backend", "niri"])
+        assert "can't be run" in capsys.readouterr().err

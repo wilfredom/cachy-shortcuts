@@ -1,8 +1,9 @@
 """Learning mode: track what you look up, not what you fire.
 
-This tool deliberately doesn't execute your shortcuts, so it can't count how
-often you press them. It counts something more useful for learning: how often
-you had to come *here* to find a binding. A shortcut you keep searching for is
+This tool never sees you press a shortcut, so it can't count how often you
+do. It counts something more useful for learning: how often you had to come
+*here* to find a binding -- by searching for it, or by running it from the
+overlay (^R) instead of pressing the keys. A shortcut you keep searching for is
 one you haven't internalised yet, which is exactly what a learning aid should
 surface.
 

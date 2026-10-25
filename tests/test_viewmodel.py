@@ -322,3 +322,55 @@ class TestLearningModeIntegration:
         monkeypatch.setattr(usage, "counts", explode)
         model = OverlayModel(shortcuts=sample)  # must not raise
         assert model.count() == len(sample)
+
+
+class TestRunning:
+    """^R: triggering the selected binding instead of pressing it."""
+
+    def test_a_runnable_row_is_handed_back(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.move(1)
+        checked = []
+        target = model.request_run(checked.append)
+        assert target is model.current()
+        assert checked == [target]
+        assert model.status == ""
+
+    def test_running_counts_as_a_lookup(self, sample, isolated_usage):
+        model = OverlayModel(shortcuts=sample)
+        model.move(1)
+        target = model.request_run(lambda s: None)
+        assert usage._load()["lookups"][target.chord.canonical]["count"] == 1
+
+    def test_a_refusal_is_shown_and_nothing_runs(self, sample, isolated_usage):
+        from cachy_shortcuts.backends.base import NotRunnable
+
+        def refuse(shortcut):
+            raise NotRunnable("that one runs a Lua function")
+
+        model = OverlayModel(shortcuts=sample)
+        model.move(1)
+        assert model.request_run(refuse) is None
+        assert model.status == "that one runs a Lua function"
+        assert usage._load()["lookups"] == {}
+
+    def test_a_cheat_sheet_row_is_not_run(self, isolated_usage):
+        reference = Shortcut(Chord.parse("Ctrl+T"), "new tab", category=Category.APP)
+        model = OverlayModel(shortcuts=[reference])
+        model.move(1)
+        assert model.request_run(lambda s: None) is None
+        assert "cheat sheet" in model.status
+
+    def test_a_span_less_hyprland_bind_is_still_runnable(self, isolated_usage):
+        generated = Shortcut(
+            Chord.parse("Super+Alt+code:11"),
+            "focus({ workspace = 2 })",
+            category=Category.WORKSPACES,
+            extras={"generated": True, "backend": "hyprland"},
+        )
+        model = OverlayModel(shortcuts=[generated])
+        model.move(1)
+        assert model.request_run(lambda s: None) is generated
+
+    def test_the_hint_names_the_key(self, sample, isolated_usage):
+        assert "^r run" in OverlayModel(shortcuts=sample).hint()

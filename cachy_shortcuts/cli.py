@@ -23,7 +23,7 @@ from . import (
     floatrule,
     usage,
 )
-from .backends.base import Backend
+from .backends.base import Backend, NotRunnable
 from .model import Category, Chord, Shortcut
 
 # --- output helpers --------------------------------------------------------
@@ -315,6 +315,27 @@ def cmd_rm(args) -> int:
     return 0
 
 
+def cmd_run(args) -> int:
+    backends = _resolve_backends(args)
+    if len(backends) > 1:
+        _die("multiple compositors found; pick one with --backend")
+    backend = backends[0]
+    try:
+        chord = Chord.parse(args.chord)
+    except (KeyError, ValueError) as exc:
+        _die(f"bad chord {args.chord!r}: {exc}")
+    target = conflicts.claimant(chord, backend.read())
+    if target is None:
+        _die(f"{chord.display()} is not bound in {backend.display_name}")
+    try:
+        backend.run(target)
+    except NotRunnable as exc:
+        _die(str(exc))
+    usage.record_lookup(target.chord.canonical)
+    print(f"{_c('ran', ACCENT)} {chord.display()} → {target.label}")
+    return 0
+
+
 def cmd_undo(args) -> int:
     try:
         restored = editor.undo_last(force=args.force)
@@ -468,6 +489,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_rm.add_argument("chord")
     add_backend_flags(p_rm)
     p_rm.set_defaults(func=cmd_rm)
+
+    p_run = sub.add_parser("run", help="do what a binding does, without pressing it")
+    p_run.add_argument("chord")
+    add_backend_flags(p_run)
+    p_run.set_defaults(func=cmd_run)
 
     p_undo = sub.add_parser("undo", help="roll back the most recent change")
     p_undo.add_argument(
