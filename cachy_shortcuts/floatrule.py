@@ -63,6 +63,11 @@ def _validator(rule: FloatRule):
         if rule.mode == "ron-list":
             stripped = written.strip()
             return stripped.startswith("[") and stripped.endswith("]")
+        if rule.path.suffix == ".lua":
+            # A Lua config that doesn't compile takes every binding with it.
+            from .backends import _lua
+
+            return _lua.syntax_ok(written) is not False
         return True
 
     return check

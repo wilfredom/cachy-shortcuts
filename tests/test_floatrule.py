@@ -283,3 +283,61 @@ def test_ron_validator_rejects_a_broken_list(cosmic):
     body = cosmic.float_rule().body
     assert check(f"[\n{body}\n]\n")
     assert not check(f"{body}\n")  # no enclosing list
+
+
+class TestHyprlandLuaRule:
+    """The same exception as a Lua ``hl.window_rule``, in the Lua config."""
+
+    @pytest.fixture
+    def lua(self, tmp_path, monkeypatch):
+        import shutil
+
+        from .conftest import FIXTURES
+
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+        root = tmp_path / "hypr"
+        shutil.copytree(FIXTURES / "hyprland-lua", root)
+        return HyprlandBackend(config_root=root)
+
+    def test_the_rule_is_a_lua_window_rule_with_both_app_ids(self, lua):
+        rule = lua.float_rule()
+        assert rule.path == lua.main_config()
+        assert rule.marker == f"-- {RULE_MARKER}:"
+        assert rule.body.splitlines()[0].startswith("-- ")
+        assert (
+            r'hl.window_rule({ match = { class = "^(dev\\.cachyos\\.Shortcuts|cachy-shortcuts)$" }, '
+            "float = true, no_blur = true })"
+        ) in rule.body
+
+    def test_the_rule_is_valid_lua(self, lua):
+        from cachy_shortcuts.backends import _lua
+
+        ok = _lua.syntax_ok(lua.float_rule().body)
+        assert ok in (True, None)  # None: no lua here to ask
+
+    def test_install_appends_once_and_leaves_the_binds_alone(self, lua):
+        main = lua.main_config()
+        before = main.read_text()
+        assert floatrule.install(lua).installed
+        text = main.read_text()
+        assert text.startswith(before.rstrip("\n"))
+        assert text.count("hl.window_rule(") == 1
+        floatrule.install(lua)
+        assert main.read_text() == text
+        assert floatrule.status_for(lua).installed
+
+    def test_a_rule_that_would_break_the_config_is_rolled_back(self, lua, monkeypatch):
+        from cachy_shortcuts.backends import _lua
+
+        if _lua.find_lua() is None:
+            pytest.skip("no lua")
+        main = lua.main_config()
+        before = main.read_text()
+        rule = lua.float_rule()
+        monkeypatch.setattr(
+            type(rule), "apply", lambda self, text: text + "\nhl.window_rule({ \n"
+        )
+        monkeypatch.setattr(HyprlandBackend, "float_rule", lambda self: rule)
+        with pytest.raises(editor.EditError, match="did not take effect"):
+            floatrule.install(lua)
+        assert main.read_text() == before

@@ -1139,9 +1139,20 @@ class HyprlandBackend(Backend):
         can't be read, the current one is the safer guess, since that is what
         a machine installing this today is most likely running.
         """
-        if self.lua_config() is not None:
-            return None  # see unsupported(): nothing here writes Lua
         pattern = f"^({'|'.join(escape_regex(app_id) for app_id in APP_IDS)})$"
+        if self.lua_config() is not None:
+            # Lua rules name their effects as the 0.53+ grammar does.
+            body = (
+                f"-- {RULE_MARKER}: keep the keybinding overlay out of the layout\n"
+                f"hl.window_rule({{ match = {{ class = {_lua.lua_string(pattern)} }}, "
+                "float = true, no_blur = true })"
+            )
+            return FloatRule(
+                backend=self.name,
+                path=self.main_config(),
+                body=body,
+                marker=f"-- {RULE_MARKER}:",
+            )
         version = self.version()
         if version is None or version >= _WINDOWRULE_REGRAMMAR:
             rules = "\n".join(

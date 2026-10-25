@@ -791,6 +791,24 @@ def evaluate(entry: Path, root: Path, timeout: float = 4.0) -> EvalResult | None
     return result
 
 
+def syntax_ok(text: str) -> bool | None:
+    """Whether ``text`` compiles as Lua; None when there is no ``lua`` to ask."""
+    lua = find_lua()
+    if lua is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [lua, "-e", "assert(load(io.read('a')))"],
+            input=text.encode(),
+            capture_output=True,
+            timeout=4.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.returncode == 0
+
+
 def lua_literal(value) -> str:
     """A JSON value from the evaluator, back as Lua source."""
     if value is None:
