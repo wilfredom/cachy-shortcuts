@@ -581,8 +581,12 @@ def table_fields(toks: list[Tok], rng: tuple[int, int]) -> list[Field] | None:
     return out
 
 
-def top_level_names(toks: list[Tok]) -> list[str]:
-    """Names assigned at file level (not inside any block), in order."""
+def top_level_names(toks: list[Tok], globals_only: bool = False) -> list[str]:
+    """Names assigned at file level (not inside any block), in order.
+
+    ``globals_only`` leaves out ``local`` declarations: those are visible only
+    in their own file, while a global is visible from every file.
+    """
     out: list[str] = []
     depth, blocks = 0, _Blocks()
     for i, t in enumerate(toks):
@@ -601,6 +605,7 @@ def top_level_names(toks: list[Tok]) -> list[str]:
             and i + 1 < len(toks)
             and _op(toks[i + 1], "=")
             and not (i and toks[i - 1].kind == "op" and toks[i - 1].text in ".:,")
+            and not (globals_only and i and _name(toks[i - 1], "local"))
         ):
             out.append(t.text)
         blocks.feed(t)

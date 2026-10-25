@@ -128,6 +128,7 @@ def _commit(
     removed by a later Hyprland ``unbind`` or beaten by an earlier mango bind
     on the same keys.
     """
+    broken_before = Counter(backend.verify())
     snapshot = backup.create([path], reason=operation)
     _write(snapshot, path, new_text)
     try:
@@ -138,6 +139,14 @@ def _commit(
     if not validate(reparsed):
         _rollback(snapshot)
         raise EditError(f"{operation} did not take effect, rolled back")
+    # A config that is code can scan fine and still fail when it runs.
+    broken_now = Counter(backend.verify()) - broken_before
+    if broken_now:
+        _rollback(snapshot)
+        raise EditError(
+            f"{operation} rolled back: it made the config fail when loaded "
+            f"({next(iter(broken_now))})"
+        )
     if live is not None and chord is not None:
         why = _why_not_live(backend, path, chord, *live)
         if why:
@@ -244,7 +253,14 @@ def add(
     offset, prefix, suffix = backend.insertion_point(text)
     moved = backend.placement(path, offset, rendered)
     if moved is not None:
-        path, offset, prefix, suffix = moved
+        moved_path, offset, prefix, suffix = moved
+        if moved_path != path:
+            # Spelled for where it lands: a name local to the first file (a
+            # Lua `mainMod`) is nil in another.
+            rendered = _render(
+                backend, chord, action, description, {"destination": moved_path}
+            )
+        path = moved_path
         text = read_for_edit(backend, path)
     new_text = text[:offset] + prefix + rendered + suffix + text[offset:]
     return _commit(

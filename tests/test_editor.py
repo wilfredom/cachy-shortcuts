@@ -558,6 +558,9 @@ class TestMangoSystemConfig:
         assert backup.list_snapshots() == []
 
 
+needs_lua = pytest.mark.skipif(shutil.which("lua") is None, reason="no lua")
+
+
 class TestHyprlandLuaEditing:
     """Edits to hyprland.lua are as surgical as to a .conf: the touched argument
     of one call changes and nothing else moves."""
@@ -670,6 +673,83 @@ class TestHyprlandLuaEditing:
         text = self.binds(lua_rw).read_text()
         assert text.index('hl.dsp.exec_cmd("bee")') > text.index("hl.unbind(")
 
+    @staticmethod
+    def with_overrides(backend, body='hl.unbind("SUPER + B")\n'):
+        """An overrides file required last, as the CachyOS profile layers them;
+        the fixture's own unbind of Super+B is moved out of binds.lua."""
+        root = backend._root
+        (root / "config" / "overrides.lua").write_text(body)
+        main = root / "hyprland.lua"
+        main.write_text(main.read_text() + 'require("config.overrides")\n')
+        binds = root / "config" / "binds.lua"
+        binds.write_text(binds.read_text().replace('hl.unbind(mainMod .. " + B")\n', ""))
+        return root / "config" / "overrides.lua"
+
+    def test_a_bind_the_overrides_file_would_unbind_goes_below_that_unbind(self, lua_rw):
+        overrides = self.with_overrides(lua_rw)
+        editor.add(lua_rw, Chord.parse("Super+B"), "exec bee")
+        live = [s for s in lua_rw.read() if s.chord == Chord.parse("Super+B")]
+        # the old bind in binds.lua stays, removed by the unbind; the new one is live
+        assert [bool(s.extras.get("disabled")) for s in live] == [True, False]
+        text = overrides.read_text()
+        assert text.index("hl.unbind(") < text.index('hl.dsp.exec_cmd("bee")')
+
+    def test_a_bind_moved_to_another_file_is_not_spelled_with_the_first_files_local(
+        self, lua_rw
+    ):
+        """`mainMod` is a local of binds.lua: in overrides.lua it is nil."""
+        overrides = self.with_overrides(lua_rw)
+        editor.add(lua_rw, Chord.parse("Super+B"), "exec bee")
+        landed = overrides.read_text()
+        assert 'hl.bind("SUPER + B", hl.dsp.exec_cmd("bee"))' in landed
+        assert "mainMod" not in landed
+
+    def test_the_super_name_offered_is_one_the_destination_can_see(self, lua_rw):
+        overrides = self.with_overrides(lua_rw)
+        assert lua_rw._lua_super_var() == "mainMod"
+        assert lua_rw._lua_super_var(self.binds(lua_rw)) == "mainMod"
+        assert lua_rw._lua_super_var(overrides) is None
+
+    def test_a_global_super_name_is_usable_from_any_file(self, lua_rw):
+        overrides = self.with_overrides(lua_rw)
+        variables = lua_rw._root / "config" / "variables.lua"
+        variables.write_text(variables.read_text() + 'SUPER_KEY = "SUPER"\n')
+        assert lua_rw._lua_super_var(overrides) == "SUPER_KEY"
+
+    def test_a_bind_above_an_unbind_in_its_own_file_goes_below_it(self, lua_rw):
+        binds = self.binds(lua_rw)
+        binds.write_text(
+            binds.read_text().replace('hl.unbind(mainMod .. " + B")\n', "")
+            + 'hl.unbind(mainMod .. " + B")\n'
+        )
+        editor.add(lua_rw, Chord.parse("Super+B"), "exec bee")
+        text = binds.read_text()
+        assert text.index('exec_cmd("bee")') > text.rindex("hl.unbind(")
+        assert 'hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("bee"))' in text
+        live = [s for s in lua_rw.read() if s.chord == Chord.parse("Super+B")]
+        assert [bool(s.extras.get("disabled")) for s in live] == [True, False]
+
+    @needs_lua
+    def test_a_write_that_makes_the_config_fail_when_run_is_rolled_back(
+        self, lua_rw, monkeypatch
+    ):
+        """The file still scans, but `mainMod .. ...` is a nil concat at load."""
+        overrides = self.with_overrides(lua_rw)
+        before = overrides.read_text()
+        monkeypatch.setattr(HyprlandBackend, "_lua_super_var", lambda self, d=None: "mainMod")
+        with pytest.raises(editor.EditError, match="fail when loaded"):
+            editor.add(lua_rw, Chord.parse("Super+B"), "exec bee")
+        assert overrides.read_text() == before
+        assert backup.list_snapshots() == []
+
+    @needs_lua
+    def test_an_error_the_config_already_had_does_not_block_edits(self, lua_rw):
+        binds = self.binds(lua_rw)
+        binds.write_text(binds.read_text() + "local broken = nil .. 'x'\n")
+        assert lua_rw.verify()  # the config already errors when run
+        editor.add(lua_rw, Chord.parse("Super+Y"), "exec foot")
+        assert "super+y" in by_chord(lua_rw.read())
+
     def test_taking_a_chord_unbinds_the_holder(self, lua_rw):
         victim = by_chord(lua_rw.read())["super+q"]
         editor.take_over(lua_rw, victim, None, Chord.parse("Super+Q"), "exec foot")
@@ -682,6 +762,7 @@ class TestHyprlandLuaEditing:
         editor.undo_last()
         assert self.binds(lua_rw).read_text() == before
 
+    @needs_lua
     def test_a_bind_made_by_a_loop_cannot_be_edited_and_says_why(self, lua_rw):
         generated = by_chord(lua_rw.read())["super+alt+code:11"]
         with pytest.raises(editor.EditError, match="loop or helper"):

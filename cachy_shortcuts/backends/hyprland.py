@@ -1020,9 +1020,12 @@ class HyprlandBackend(Backend):
         if same_chord:
             keys_expr = keys_raw
         else:
-            keys_expr = _lua_keys_expr(
-                chord, extras.get("super_var", self._lua_super_var())
+            super_var = (
+                extras["super_var"]
+                if "super_var" in extras
+                else self._lua_super_var(extras.get("destination"))
             )
+            keys_expr = _lua_keys_expr(chord, super_var)
 
         dsp_raw = extras.get("dsp_raw")
         if dsp_raw is not None and action.strip() == extras.get("action0"):
@@ -1044,18 +1047,42 @@ class HyprlandBackend(Backend):
             out += (seps[1] if len(seps) > 1 else ", ") + opts_expr
         return out + tail
 
-    def _lua_super_var(self) -> str | None:
-        """A name the write-target file defines as ``"SUPER"``, for new binds."""
+    def _lua_super_var(self, destination: Path | None = None) -> str | None:
+        """A name for the super key that a new bind in ``destination`` can use.
+
+        ``destination`` defaults to where new binds go. A ``local`` is only
+        good in its own file, so a bind that lands in a different one (after an
+        ``hl.unbind``, say) must not be spelled with another file's local: it
+        would be nil there. A global works anywhere.
+        """
+        files = self._lua_tree()
         paths = self._lua_paths()
-        if not paths:
+        if not files or not paths:
             return None
-        try:
-            text = paths[0].read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
-        toks = _lua.tokenize(text)
-        consts = _lua.constants([f.toks for f in self._lua_tree()])
-        return next((n for n in _lua.top_level_names(toks) if consts.get(n) == "SUPER"), None)
+        target = _resolved(destination or paths[0])
+        consts = _lua.constants([f.toks for f in files])
+        names: list[str] = []
+        for f in files:
+            if _resolved(f.path) == target:
+                names += _lua.top_level_names(f.toks)
+        for f in files:
+            names += _lua.top_level_names(f.toks, globals_only=True)
+        return next((n for n in names if consts.get(n) == "SUPER"), None)
+
+    def verify(self) -> list[str]:
+        """Errors the Lua config raises when run, with line numbers removed.
+
+        Compared before and after a write: a bind spelled with a name that
+        isn't in scope, or a stray edit, shows up here when it runs even though
+        the file still scans fine.
+        """
+        if self.lua_config() is None:
+            return []
+        entry = self.main_config()
+        result = _lua.evaluate(entry, entry.parent)
+        if result is None:
+            return []
+        return [re.sub(r":\d+:", ":", e) for e in result.errors]
 
     def _lua_insertion_point(self, text: str) -> tuple[int, str, str]:
         """After the last file-level bind -- never inside a loop, function or submap."""
@@ -1078,14 +1105,26 @@ class HyprlandBackend(Backend):
         The same trap as the ``.conf`` grammar: an ``unbind`` removes what ran
         before it, so a new bind above one is silently undone.
         """
-        probe = self._parse_lua(rendered, path)
-        if not probe or probe[0].extras.get("keys") is None:
-            return None
-        wanted = _lua_identity(probe[0].extras["keys"])
         files = self._lua_tree()
-        if not files or wanted is None:
+        if not files:
             return None
-        consts = _lua.constants([f.toks for f in files])
+        # The new bind is spelled for the file it was headed for, so it folds
+        # with every file's constants, not only the ones outside that file.
+        rendered_toks = _lua.tokenize(rendered)
+        consts = _lua.constants([f.toks for f in files] + [rendered_toks])
+        probe = next(
+            (
+                shortcut
+                for _, shortcut in self._lua_static(rendered, rendered_toks, path, consts)
+                if shortcut is not None
+            ),
+            None,
+        )
+        if probe is None:
+            return None
+        wanted = _lua_identity(probe.extras["keys"])
+        if wanted is None:
+            return None
         per_file = {
             _resolved(f.path): (f, self._lua_static(f.text, f.toks, f.path, consts))
             for f in files

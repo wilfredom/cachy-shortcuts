@@ -125,6 +125,15 @@ class Backend(ABC):
         """Lines for ``doctor`` about how this config is being read, if notable."""
         return []
 
+    def verify(self) -> list[str]:
+        """Problems the config as written would hit when the compositor loads it.
+
+        The editor compares this before and after a write and rolls back if the
+        write added one. Only a config that is code can fail in a way that
+        re-parsing the file doesn't show (Hyprland's Lua), so the default is none.
+        """
+        return []
+
     def is_installed(self) -> bool:
         """Whether this compositor appears to exist on the system at all."""
         return bool(shutil.which(self.name)) or any(
