@@ -265,8 +265,8 @@ class BindingForm(Gtk.Box):
     def _handle_return(self, ctrl: bool) -> None:
         draft = self.draft
         if ctrl:
-            # Ctrl+Enter is "yes, take that chord from whoever has it".
-            if draft.confirm_replace():
+            # Ctrl+Enter is "yes": take a claimed chord, or allow a bare key.
+            if draft.confirm():
                 self.refresh()
                 return
         if draft.focus is Field.COMMAND:

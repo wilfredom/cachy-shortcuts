@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from .. import conflicts
+from .. import conflicts, guard
 from ..appscan import DesktopApp, rank
 from ..model import Chord, Shortcut
 
@@ -95,6 +95,9 @@ class BindingDraft:
     suggestion_index: int = 0
     # Set once the user has explicitly agreed to take a claimed chord.
     replace_confirmed: bool = False
+    # How many times the user has confirmed a chord with no real modifier
+    # (see guard.risk); handed to the editor as ``risk_ok``.
+    risk_confirmed: int = 0
 
     # --- construction --------------------------------------------------
 
@@ -228,11 +231,13 @@ class BindingDraft:
         self.chord = chord
         self.chord_armed = False
         self.replace_confirmed = False
+        self.risk_confirmed = 0
 
     def clear_chord(self) -> None:
         self.chord = None
         self.chord_armed = True
         self.replace_confirmed = False
+        self.risk_confirmed = 0
 
     def chord_text(self) -> str:
         if self.chord is not None:
@@ -267,6 +272,35 @@ class BindingDraft:
         self.replace_confirmed = True
         return True
 
+    def risk_needed(self) -> int:
+        """Confirmations the chord needs; none for the chord it already has."""
+        if self.chord is None:
+            return 0
+        if self.target is not None and self.chord == self.target.chord:
+            return 0
+        return guard.risk(self.chord)
+
+    def risk_message(self) -> str | None:
+        needed = self.risk_needed()
+        if self.risk_confirmed >= needed:
+            return None
+        left = needed - self.risk_confirmed
+        ask = "twice" if left > 1 else "once more" if self.risk_confirmed else "to allow it"
+        return f"{guard.explain(self.chord)}  —  ctrl+enter {ask}"
+
+    def confirm(self) -> bool:
+        """Ctrl+Enter: agree to the next outstanding thing, if any.
+
+        A claimed chord first, then each confirmation a modifier-less chord
+        needs, so no single key press can agree to both.
+        """
+        if self.claimant() is not None and not self.replace_confirmed:
+            return self.confirm_replace()
+        if self.risk_confirmed < self.risk_needed():
+            self.risk_confirmed += 1
+            return True
+        return False
+
     def blockers(self) -> list[str]:
         """Reasons the form cannot be saved yet."""
         out: list[str] = []
@@ -276,6 +310,9 @@ class BindingDraft:
             out.append("a key combination is required")
         if self.claimant() is not None and not self.replace_confirmed:
             out.append(self.conflict_message() or "chord already bound")
+        risk = self.risk_message()
+        if risk:
+            out.append(risk)
         return out
 
     def warnings(self) -> list[str]:
@@ -317,4 +354,6 @@ class BindingDraft:
             return "press a combination · backspace clear · tab next field"
         if self.claimant() is not None and not self.replace_confirmed:
             return "^enter take the chord · tab next field · esc cancel"
+        if self.risk_message():
+            return "^enter allow a bare key · tab next field · esc cancel"
         return "tab next field · enter save · esc cancel"

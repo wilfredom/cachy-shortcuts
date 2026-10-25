@@ -515,9 +515,16 @@ class OverlayWindow(Gtk.ApplicationWindow):
                     draft.chord,
                     action,
                     draft.description,
+                    risk_ok=draft.risk_confirmed,
                 )
             elif draft.target is None:
-                editor.add(self.backend, draft.chord, action, draft.description)
+                editor.add(
+                    self.backend,
+                    draft.chord,
+                    action,
+                    draft.description,
+                    risk_ok=draft.risk_confirmed,
+                )
             else:
                 editor.update(
                     self.backend,
@@ -525,6 +532,7 @@ class OverlayWindow(Gtk.ApplicationWindow):
                     chord=draft.chord,
                     action=action,
                     description=draft.description,
+                    risk_ok=draft.risk_confirmed,
                 )
         except editor.EditError as exc:
             self.model.status = str(exc)

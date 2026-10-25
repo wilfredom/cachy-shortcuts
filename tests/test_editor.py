@@ -1457,3 +1457,22 @@ class TestWriteFile:
         assert path.read_text() == "changed\n"
         editor.undo_last()
         assert path.read_text() == "original\n"
+
+
+def test_a_bare_typing_key_is_refused_until_confirmed_twice(niri_rw):
+    chord = Chord.parse("Down")
+    before = niri_rw.config_paths()[0].read_text()
+    for ok in (0, 1):
+        with pytest.raises(editor.RiskRefused):
+            editor.add(niri_rw, chord, 'spawn-sh "true"', risk_ok=ok)
+        assert niri_rw.config_paths()[0].read_text() == before
+    editor.add(niri_rw, chord, 'spawn-sh "true"', risk_ok=2)
+    assert any(s.chord == chord for s in niri_rw.read())
+
+
+def test_rebinding_to_a_bare_key_is_refused(niri_rw):
+    target = next(s for s in niri_rw.read() if s.source is not None)
+    with pytest.raises(editor.RiskRefused):
+        editor.rebind(niri_rw, target, Chord.parse("Left"))
+    # Same chord: an edit of the action alone is not re-graded.
+    editor.update(niri_rw, target, description="x", risk_ok=0)

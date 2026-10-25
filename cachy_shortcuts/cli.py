@@ -269,13 +269,21 @@ def cmd_add(args) -> int:
     action = editor.wrap_command_as_action(backend, command)
     try:
         if victim is None:
-            result = editor.add(backend, chord, action, args.description or "")
+            result = editor.add(
+                backend, chord, action, args.description or "", risk_ok=args.yes
+            )
         else:
             # Taking a chord means unbinding what holds it, not binding it a
             # second time: mango would keep running the old bind, Hyprland
             # would run both.
             result = editor.take_over(
-                backend, victim, None, chord, action, args.description or ""
+                backend,
+                victim,
+                None,
+                chord,
+                action,
+                args.description or "",
+                risk_ok=args.yes,
             )
     except editor.EditError as exc:
         _die(str(exc))
@@ -482,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--app", help="bind an installed application by name")
     p_add.add_argument("--description", help="label shown in the overlay")
     p_add.add_argument("--force", action="store_true", help="take the chord even if claimed")
+    p_add.add_argument(
+        "--yes",
+        action="count",
+        default=0,
+        help="confirm a chord with no Super/Ctrl/Alt (repeat for a typing key like Down)",
+    )
     add_backend_flags(p_add)
     p_add.set_defaults(func=cmd_add)
 

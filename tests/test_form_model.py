@@ -360,3 +360,37 @@ class TestHints:
 
         draft.confirm_replace()
         assert draft.hint() == "tab next field · enter save · esc cancel"
+
+
+class TestBareKeyGuard:
+    def _draft(self, existing, chord):
+        draft = BindingDraft.for_new(existing, command="firefox")
+        draft.capture(Chord.parse(chord))
+        return draft
+
+    def test_a_modified_chord_needs_nothing(self, existing):
+        assert self._draft(existing, "Super+Alt+F9").can_save()
+
+    def test_a_typing_key_needs_two_confirmations(self, existing):
+        draft = self._draft(existing, "Down")
+        assert not draft.can_save()
+        assert draft.confirm() and not draft.can_save()
+        assert draft.risk_message().endswith("once more")
+        assert draft.confirm() and draft.can_save()
+        assert draft.risk_confirmed == 2
+        assert not draft.confirm()  # nothing left to agree to
+
+    def test_an_fkey_needs_one(self, existing):
+        draft = self._draft(existing, "F9")
+        assert draft.confirm() and draft.can_save()
+
+    def test_recapturing_withdraws_the_confirmations(self, existing):
+        draft = self._draft(existing, "Down")
+        draft.confirm()
+        draft.capture(Chord.parse("Up"))
+        assert draft.risk_confirmed == 0 and not draft.can_save()
+
+    def test_editing_other_fields_of_a_bare_bind_is_not_blocked(self, existing):
+        target = Shortcut(chord=Chord.parse("Down"), action="spawn x")
+        draft = BindingDraft.for_edit(existing, target, "x")
+        assert draft.can_save()
