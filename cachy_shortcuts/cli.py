@@ -323,6 +323,29 @@ def cmd_rm(args) -> int:
     return 0
 
 
+def cmd_reset(args) -> int:
+    backends = _resolve_backends(args)
+    if len(backends) > 1:
+        _die("multiple compositors found; pick one with --backend")
+    backend = backends[0]
+    try:
+        chord = Chord.parse(args.chord)
+    except (KeyError, ValueError) as exc:
+        _die(f"bad chord {args.chord!r}: {exc}")
+    target = conflicts.claimant(chord, backend.read())
+    if target is None:
+        _die(f"{chord.display()} is not bound in {backend.display_name}")
+    try:
+        result = editor.reset(backend, target, risk_ok=args.yes)
+    except editor.EditError as exc:
+        _die(str(exc))
+    now = result.chord.display() if result.chord else chord.display()
+    print(f"{_c('reset', ACCENT)} {chord.display()} → {now} ({target.label})")
+    print(_c(f"  {result.path}", DIM))
+    print(_c("  undo with: cachy-shortcuts undo", DIM))
+    return 0
+
+
 def cmd_run(args) -> int:
     backends = _resolve_backends(args)
     if len(backends) > 1:
@@ -503,6 +526,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_rm.add_argument("chord")
     add_backend_flags(p_rm)
     p_rm.set_defaults(func=cmd_rm)
+
+    p_reset = sub.add_parser(
+        "reset", help="put one binding back how it was before you edited it"
+    )
+    p_reset.add_argument("chord", help="the chord it is on now")
+    p_reset.add_argument(
+        "--yes", action="count", default=0, help="confirm landing on a bare key"
+    )
+    add_backend_flags(p_reset)
+    p_reset.set_defaults(func=cmd_reset)
 
     p_run = sub.add_parser("run", help="do what a binding does, without pressing it")
     p_run.add_argument("chord")

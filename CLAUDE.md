@@ -29,6 +29,9 @@ machine the overlay window *can* be constructed and its key handlers driven
 without presenting it. Say explicitly which of these you did when reporting
 such a change rather than implying more was run.
 
+## Rules
+Do not push/pull or merge branches unless it's a container session. Hyprland/interactive sessions in VS Code I handle git pieces.
+
 ## Architecture
 
 ### The canonical `Chord` is what makes everything else work

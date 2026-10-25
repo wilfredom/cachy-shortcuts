@@ -157,6 +157,27 @@ def restore(snapshot: Snapshot) -> list[Path]:
     return restored
 
 
+def stored_text(snapshot: Snapshot, path: Path) -> str | None:
+    """What ``path`` held when ``snapshot`` was taken, or None if it had nothing.
+
+    None for a file the snapshot recorded as absent, one it doesn't cover, or
+    a copy that can't be read back.
+    """
+    try:
+        data = json.loads((snapshot.path / MANIFEST).read_text(encoding="utf-8"))
+        want = str(path.resolve())
+    except (OSError, RuntimeError, json.JSONDecodeError):
+        return None
+    for entry in data.get("files", []):
+        if entry.get("original") != want or entry.get("absent"):
+            continue
+        try:
+            return (snapshot.path / entry["stored"]).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, KeyError):
+            return None
+    return None
+
+
 class UndoRefused(RuntimeError):
     """Undo would destroy changes made to a file after the edit."""
 

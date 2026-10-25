@@ -96,11 +96,13 @@ class Shortcut:
     # Backend-specific bits that must survive a round-trip untouched
     # (niri's allow-when-locked / cooldown-ms, mango's bind flags, ...).
     extras: dict = field(default_factory=dict)
+    # A generated or user-written label (see labels.py); never beats description.
+    friendly: str = ""
 
     @property
     def label(self) -> str:
         """What the right-hand column shows."""
-        return self.description or describe_action(self.action)
+        return self.description or self.friendly or describe_action(self.action)
 
     @property
     def owner(self) -> str | None:

@@ -1476,3 +1476,51 @@ def test_rebinding_to_a_bare_key_is_refused(niri_rw):
         editor.rebind(niri_rw, target, Chord.parse("Left"))
     # Same chord: an edit of the action alone is not re-graded.
     editor.update(niri_rw, target, description="x", risk_ok=0)
+
+
+class TestReset:
+    """`reset` undoes one binding's edits, not everything newest-first."""
+
+    @pytest.mark.parametrize(
+        "fixture, chord", [("niri_rw", "super+b"), ("hypr_rw", "super+h"), ("mango_rw", None)]
+    )
+    def test_rebind_twice_then_reset_goes_back_to_the_original(
+        self, request, fixture, chord
+    ):
+        backend = request.getfixturevalue(fixture)
+        path = backend.config_paths()[0]
+        original = path.read_text()
+        shortcuts = backend.read()
+        target = by_chord(shortcuts)[chord] if chord else next(
+            s for s in shortcuts if s.source is not None and s.chord.mods
+        )
+        first = editor.rebind(backend, target, Chord.parse("Super+Alt+F9"))
+        moved = next(s for s in backend.read() if s.chord == first.chord)
+        second = editor.rebind(backend, moved, Chord.parse("Super+Alt+F10"))
+        moved = next(s for s in backend.read() if s.chord == second.chord)
+
+        editor.reset(backend, moved)
+
+        assert any(s.chord == target.chord and s.action == target.action
+                   for s in backend.read())
+        assert path.read_text() == original
+
+    def test_a_retargeted_binding_gets_its_command_back(self, hypr_rw):
+        target = by_chord(hypr_rw.read())["super+h"]
+        editor.retarget(hypr_rw, target, "movefocus r")
+        changed = by_chord(hypr_rw.read())["super+h"]
+        editor.reset(hypr_rw, changed)
+        assert by_chord(hypr_rw.read())["super+h"].action == target.action
+
+    def test_without_history_it_says_so(self, niri_rw):
+        target = by_chord(niri_rw.read())["super+b"]
+        with pytest.raises(editor.EditError, match="no earlier version"):
+            editor.reset(niri_rw, target)
+
+    def test_it_will_not_land_on_a_chord_something_else_holds(self, niri_rw):
+        found = by_chord(niri_rw.read())
+        editor.rebind(niri_rw, found["super+b"], Chord.parse("Super+Alt+F9"))
+        editor.add(niri_rw, Chord.parse("Super+B"), 'spawn "true"')
+        moved = by_chord(niri_rw.read())["super+alt+f9"]
+        with pytest.raises(editor.EditError, match="something else"):
+            editor.reset(niri_rw, moved)

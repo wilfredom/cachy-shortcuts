@@ -364,6 +364,68 @@ def update(
     )
 
 
+def reset(backend: Backend, shortcut: Shortcut, risk_ok: int = 0) -> EditResult:
+    """Put one binding back how it was before it was first edited here.
+
+    Looks through the snapshots oldest first, at the file the binding lives
+    in, for the earliest copy where this binding existed in another form: the
+    same action on another chord (a rebind), or the same chord doing something
+    else (a retarget). Undo can only walk back every edit newest first; this
+    undoes one binding's edits and leaves the rest alone.
+
+    The write is an ordinary ``rebind`` / ``retarget``, so it is validated and
+    rolled back like any other, and refused if that chord is held by something
+    else now.
+    """
+    if shortcut.source is None:
+        raise EditError(
+            shortcut.extras.get("readonly_reason") or "binding has no recorded source span"
+        )
+    path = _target_file(backend, shortcut)
+    current = backend.read()
+    taken = {s.chord for s in current}
+    blocked: Chord | None = None
+    for snapshot in reversed(backup.list_snapshots()):
+        text = backup.stored_text(snapshot, path)
+        if text is None:
+            continue
+        try:
+            then = backend.parse(text, path)
+        except Exception:  # noqa: BLE001 - an unreadable old copy is just skipped
+            continue
+        same_action = [
+            s
+            for s in then
+            if s.action == shortcut.action
+            and s.chord != shortcut.chord
+            and not s.extras.get("disabled")
+            and (s.extras.get("submap") or "") == (shortcut.extras.get("submap") or "")
+        ]
+        # An old chord something else holds now (or another bind of the same
+        # action already sits on) is not what this binding was.
+        free = [s for s in same_action if s.chord not in taken]
+        if free:
+            return rebind(backend, shortcut, free[0].chord, risk_ok=risk_ok)
+        if same_action and blocked is None:
+            blocked = same_action[0].chord
+        same_chord = [
+            s
+            for s in then
+            if s.chord == shortcut.chord
+            and s.action != shortcut.action
+            and not s.extras.get("disabled")
+            and (s.extras.get("submap") or "") == (shortcut.extras.get("submap") or "")
+        ]
+        if same_chord:
+            return retarget(backend, shortcut, same_chord[0].action)
+    if blocked is not None:
+        raise EditError(
+            f"{blocked.display()} was its earlier chord, but something else "
+            "is bound there now"
+        )
+    raise EditError("no earlier version of this binding to go back to")
+
+
 def take_over(
     backend: Backend,
     victim: Shortcut,
