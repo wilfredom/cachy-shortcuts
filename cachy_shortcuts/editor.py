@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import backup
+from . import backup, guard
 from .backends.base import Backend
 from .backends.cosmic import CosmicBackend
 from .model import Chord, Shortcut
@@ -25,6 +25,28 @@ from .model import Chord, Shortcut
 
 class EditError(RuntimeError):
     """Raised when a write could not be applied, after rollback."""
+
+
+class RiskRefused(EditError):
+    """The chord has no real modifier and the caller hasn't confirmed enough."""
+
+    def __init__(self, chord: Chord, needed: int) -> None:
+        self.chord = chord
+        self.needed = needed
+        again = "twice" if needed > 1 else "once"
+        super().__init__(
+            f"{guard.explain(chord)}. Confirm {again} to bind it anyway "
+            "(--yes, repeated for a typing key; ctrl+enter in the overlay)."
+        )
+
+
+def _check_risk(chord: Chord, risk_ok: int, old: Chord | None = None) -> None:
+    """Refuse a chord graded riskier than ``risk_ok``; an unchanged one passes."""
+    if chord == old:
+        return
+    needed = guard.risk(chord)
+    if needed > risk_ok:
+        raise RiskRefused(chord, needed)
 
 
 @dataclass
@@ -246,7 +268,9 @@ def add(
     chord: Chord,
     action: str,
     description: str = "",
+    risk_ok: int = 0,
 ) -> EditResult:
+    _check_risk(chord, risk_ok)
     path = _target_file(backend, None)
     text = read_for_edit(backend, path)
     rendered = _render(backend, chord, action, description)
@@ -274,7 +298,9 @@ def add(
     )
 
 
-def rebind(backend: Backend, shortcut: Shortcut, new_chord: Chord) -> EditResult:
+def rebind(
+    backend: Backend, shortcut: Shortcut, new_chord: Chord, risk_ok: int = 0
+) -> EditResult:
     """Change which keys trigger an existing binding."""
     return _replace(
         backend,
@@ -283,6 +309,7 @@ def rebind(backend: Backend, shortcut: Shortcut, new_chord: Chord) -> EditResult
         new_action=shortcut.action,
         new_description=shortcut.description,
         operation="rebind",
+        risk_ok=risk_ok,
     )
 
 
@@ -315,6 +342,7 @@ def update(
     chord: Chord | None = None,
     action: str | None = None,
     description: str | None = None,
+    risk_ok: int = 0,
 ) -> EditResult:
     """Change any combination of chord, action and description in one write.
 
@@ -332,6 +360,7 @@ def update(
             shortcut.description if description is None else description
         ),
         operation="update",
+        risk_ok=risk_ok,
     )
 
 
@@ -342,6 +371,7 @@ def take_over(
     chord: Chord,
     action: str,
     description: str = "",
+    risk_ok: int = 0,
 ) -> EditResult:
     """Give ``chord`` to ``target`` (or to a new binding), unbinding ``victim``.
 
@@ -355,6 +385,7 @@ def take_over(
     every file that was written, whichever that turned out to be. If the
     second write fails, that snapshot is the newest one left.
     """
+    _check_risk(chord, risk_ok, target.chord if target is not None else None)
     combined = backup.create([_target_file(backend, victim)], reason="take over")
     try:
         removed = delete(backend, victim)
@@ -378,11 +409,16 @@ def take_over(
         backup.seal(combined)
         also_removed.append(other)
     if target is None:
-        result = add(backend, chord, action, description)
+        result = add(backend, chord, action, description, risk_ok=risk_ok)
     else:
         fresh = _relocate(backend, target)
         result = update(
-            backend, fresh, chord=chord, action=action, description=description
+            backend,
+            fresh,
+            chord=chord,
+            action=action,
+            description=description,
+            risk_ok=risk_ok,
         )
     backup.absorb(combined, result.snapshot)
     backup.seal(combined)
@@ -452,7 +488,9 @@ def _replace(
     new_action: str,
     new_description: str,
     operation: str,
+    risk_ok: int = 0,
 ) -> EditResult:
+    _check_risk(new_chord, risk_ok, shortcut.chord)
     if shortcut.source is None:
         raise EditError(
             shortcut.extras.get("readonly_reason") or "binding has no recorded source span"
