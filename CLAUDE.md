@@ -6,11 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 pip install -e ".[dev]"     # editable install + pytest
-pytest                      # whole suite (testpaths = tests, set in pyproject.toml)
-pytest tests/test_editor.py                                  # one file
-pytest tests/test_form_model.py::TestChordCapture            # one class
-pytest tests/test_form_model.py -k suggested_chord           # one test
-pytest -q                                                    # what CI-less review runs
+pytest -q                   # whole suite (testpaths = tests, set in pyproject.toml); what CI-less review runs
 ```
 
 No linter or formatter is configured — match the surrounding style rather than
@@ -21,23 +17,17 @@ parsers are hand-rolled on purpose). Only the overlay needs PyGObject, GTK4 and
 gtk4-layer-shell, which are system packages, not wheels. `pyyaml` is optional:
 a dependency-free fallback parser covers the bundled cheat-sheet schema.
 
-```sh
-cachy-shortcuts doctor      # detection, config paths, conflicts, missing deps
-cachy-shortcuts list        # bindings, grouped
-cachy-shortcuts overlay     # the GUI (needs a Wayland session)
-cachy-shortcuts undo        # roll back the most recent write
-```
-
 ## Environment limits when working here
 
 This repo is sometimes edited in a container with **no Wayland session and no
-GTK4/PyGObject** (on a real CachyOS machine the overlay *can* be constructed
-and its key handlers driven without presenting it), so `cachy_shortcuts/ui/overlay.py`, `binding_form.py`,
-`chord_field.py` and `_layershell.py` cannot be imported or executed — only
-`py_compile`d. That constraint is the reason for the architecture below, and
-changes to those four files have to be verified by hand on a real machine
-(`cachy-shortcuts doctor`, then `cachy-shortcuts overlay`). Say so explicitly
-when reporting such a change rather than implying it was run.
+GTK4/PyGObject**, so `cachy_shortcuts/ui/overlay.py`, `binding_form.py`,
+`chord_field.py` and `_layershell.py` cannot be imported or executed there —
+only `py_compile`d. That constraint is the reason for the architecture below,
+and changes to those four files have to be verified by hand on a real machine
+(`cachy-shortcuts doctor`, then `cachy-shortcuts overlay`). On a real CachyOS
+machine the overlay window *can* be constructed and its key handlers driven
+without presenting it. Say explicitly which of these you did when reporting
+such a change rather than implying more was run.
 
 ## Architecture
 
@@ -66,11 +56,14 @@ fully testable), `render(chord, action, description, extras)`,
 
 The editor also calls overridable write hooks with safe defaults — check these
 before special-casing a backend in `editor.py`: `unsupported()` (refuse all
-writes, Hyprland Lua), `write_path(path)` / `seed_text(path)` (redirect an edit
-away from a system file; mango copies the system config verbatim into the new
-user file, since a user `config.conf` replaces it outright), `placement()`
-(move an insertion past a later `unbind`, Hyprland) and `deletion_span()` (what
-a delete cuts, niri overrides it).
+writes; no backend uses it today), `write_path(path)` / `seed_text(path)`
+(redirect an edit away from a system file; mango copies the system config
+verbatim into the new user file, since a user `config.conf` replaces it
+outright), `placement()` (move an insertion past a later `unbind`, Hyprland;
+`add` re-renders with `extras["destination"]` when it lands in another file),
+`deletion_span()` (what a delete cuts, niri overrides it) and `verify()`
+(config problems found by running it; `_commit` rolls back a write that adds
+one, Hyprland Lua).
 
 Offsets are **character** offsets into the decoded UTF-8 text, not bytes.
 
