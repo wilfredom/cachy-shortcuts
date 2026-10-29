@@ -230,3 +230,8 @@ The effort level or mode sets the ceiling, not the target.
 - **Report output per cost at each milestone.** State what changed for Will (bindings fixed,
   backends covered, tests added) and the spend so far (agents launched, tokens, wall time —
   whatever the session reports). If the ratio is poor, stop and ask before continuing.
+- **A cloud session that executes a plan ends by merging to `main`** (Will, 2026-10-29). Push the
+  branch, open a PR in each repository the session changed, and merge it with a merge commit.
+  The gate: `pytest` shows no failure that `main` does not already have. While GitHub Actions is
+  blocked by the spending limit (until 2026-10-31), say in the PR that CI did not run. A local
+  session still never commits or pushes. The full rule is in `cachy-stuff/CLAUDE.md`.
